@@ -62,9 +62,28 @@ uniform int sprite_ncols;
 /* PROGRAM                                                                   */
 /*****************************************************************************/
 
+vec4 sprite_texture(uint frame_idx, vec2 uv)
+{
+    int row = int(frame_idx) / sprite_ncols;
+    row = (sprite_nrows-1) - row;
+    int col = int(frame_idx) % sprite_ncols;
+
+    int row_height = (textureSize(sprite_sheet, 0).y / sprite_nrows);
+    int col_width = (textureSize(sprite_sheet, 0).x  / sprite_ncols);
+
+    int u_offset = col * col_width;
+    int v_offset = row * row_height;
+
+    /* Normalize the new coordinate to the [0, 1] range */
+    float u_coord = u_offset + (uv.x * col_width);
+    float v_coord = v_offset + (uv.y * row_height);
+    return texture(sprite_sheet, vec2(u_coord / textureSize(sprite_sheet, 0).x,
+                                      v_coord / textureSize(sprite_sheet, 0).y));
+}
+
 void main()
 {
-    vec4 color = texture(sprite_sheet, from_vertex.uv);
+    vec4 color = sprite_texture(from_vertex.frame, from_vertex.uv);
     if(color.a <= 0.5)
         discard;
     o_frag_color = color;

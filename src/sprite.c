@@ -100,13 +100,13 @@ static void on_update(void *user, void *event)
             if(next_frame == curr->desc.nframes) {
                 next_frame = 0;
                 curr->count_left--;
-                curr->begin_tick_ms = curr_time;
             }
             if(curr->count_left == 0) {
                 vec_id_push(&to_delete, id);
                 break;
             }
             curr->curr_frame = next_frame;
+            curr->begin_tick_ms = curr_time;
             break;
         }
         case SPRITE_STATIC: {

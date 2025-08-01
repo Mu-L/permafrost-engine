@@ -138,11 +138,13 @@ static void do_draw_call(struct draw_call_desc desc, struct sprite_sheet_desc sh
     struct gpu_sprite_desc descs[MAX_SPRITES];
     size_t nents = desc.end_idx - desc.begin_idx + 1;
     nents = MIN(nents, MAX_SPRITES);
+    size_t sprite_offset = desc.begin_idx;
+
     for(int i = 0; i < nents; i++) {
         descs[i] = (struct gpu_sprite_desc){
-            .ws_pos = sprites[i].ws_pos,
-            .ws_size = sprites[i].ws_size,
-            .frame_idx = sprites[i].frame,
+            .ws_pos = sprites[sprite_offset + i].ws_pos,
+            .ws_size = sprites[sprite_offset + i].ws_size,
+            .frame_idx = sprites[sprite_offset + i].frame,
         };
     }
 
@@ -158,19 +160,19 @@ static void do_draw_call(struct draw_call_desc desc, struct sprite_sheet_desc sh
     const struct textured_vert corners[] = {
         (struct textured_vert) {
             .pos = (vec3_t) {-1.0f, -1.0f, 0.0f}, 
-            .uv =  (vec2_t) {0.0f, 0.0f},
+            .uv =  (vec2_t) {1.0f, 0.0f},
         },
         (struct textured_vert) {
             .pos = (vec3_t) {-1.0f, 1.0f, 0.0f}, 
-            .uv =  (vec2_t) {0.0f, 1.0f},
-        },
-        (struct textured_vert) {
-            .pos = (vec3_t) {1.0f, 1.0f, 0.0f}, 
             .uv =  (vec2_t) {1.0f, 1.0f},
         },
         (struct textured_vert) {
+            .pos = (vec3_t) {1.0f, 1.0f, 0.0f}, 
+            .uv =  (vec2_t) {0.0f, 1.0f},
+        },
+        (struct textured_vert) {
             .pos = (vec3_t) {1.0f, -1.0f, 0.0f}, 
-            .uv =  (vec2_t) {1.0f, 0.0f},
+            .uv =  (vec2_t) {0.0f, 0.0f},
         },
     };
 

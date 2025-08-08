@@ -380,6 +380,7 @@ static int       PyCombatableEntity_set_base_armour(PyCombatableEntityObject *se
 static PyObject *PyCombatableEntity_get_attack_range(PyCombatableEntityObject *self, void *closure);
 static int       PyCombatableEntity_set_attack_range(PyCombatableEntityObject *self, PyObject *value, void *closure);
 static int       PyCombatableEntity_set_corpse_model(PyCombatableEntityObject *self, PyObject *value, void *closure);
+static int       PyCombatableEntity_set_projectile_fire_desc(PyCombatableEntityObject *self, PyObject *value, void *closure);
 static PyObject *PyCombatableEntity_hold_position(PyCombatableEntityObject *self);
 static PyObject *PyCombatableEntity_attack(PyCombatableEntityObject *self, PyObject *args);
 static PyObject *PyCombatableEntity_pickle(PyCombatableEntityObject *self, PyObject *args, PyObject *kwargs);
@@ -437,6 +438,12 @@ static PyGetSetDef PyCombatableEntity_getset[] = {
     "Descriptor of the corpse model to display upon entity death. Only shown for entities with a "
     "death animation. Must be a tuple with 3 values: directory (string), filename (string), "
     "model scale (tuple of 3 floats).",
+    NULL},
+    {"projectile_fire_descriptor",
+    NULL, (setter)PyCombatableEntity_set_projectile_fire_desc,
+    "Descriptor of when the ranged entity fires its' projectile. Must be a tuple with 4 values: "
+    "the frame offset index (int), the fire mode (0 or 1 for high or low), the bone name (string "
+    "or None), and the offset (tuple of 3 floats).",
     NULL},
     {NULL}  /* Sentinel */
 };
@@ -2761,6 +2768,39 @@ static int PyCombatableEntity_set_corpse_model(PyCombatableEntityObject *self, P
     }
 
     G_Combat_SetCorpseModel(self->super.ent, dir, pfobj, scale);
+    return 0;
+}
+
+static int PyCombatableEntity_set_projectile_fire_desc(PyCombatableEntityObject *self, 
+                                                       PyObject *value, void *closure)
+{
+    if(G_FlagsGet(self->super.ent) & ENTITY_FLAG_ZOMBIE) {
+        PyErr_SetString(PyExc_RuntimeError, "Cannot set attribute of zombie entity.");
+        return -1;
+    }
+
+    struct proj_fire_desc fd;
+    const char *bone_name = NULL;
+    PyObject *opt_bone_name;
+
+    if(!PyTuple_Check(value) || !PyArg_ParseTuple(value, "iiO(fff)", &fd.frame_offset, 
+        &fd.fire_mode, &opt_bone_name, &fd.offset.x, &fd.offset.y, &fd.offset.z)) {
+
+        PyErr_SetString(PyExc_TypeError, "Arguments must be an integer (frame offset), an integer "
+            "(fire mode), a string or None (bone name), and a tuple of 3 floats (offset).");
+        return -1;
+    }
+
+    if(opt_bone_name == Py_None) {
+        fd.bone_name[0] = '\0';
+    }else if(!PyString_Check(opt_bone_name)) {
+        PyErr_SetString(PyExc_TypeError, "Third argument must be a string or None.");
+        return -1;
+    }else{
+        pf_strlcpy(fd.bone_name, PyString_AS_STRING(opt_bone_name), sizeof(fd.bone_name));
+    }
+
+    G_Combat_SetProjFireDesc(self->super.ent, &fd);
     return 0;
 }
 

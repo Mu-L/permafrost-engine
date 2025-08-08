@@ -294,6 +294,32 @@ enum combat_stance{
     COMBAT_STANCE_NO_ENGAGEMENT,
 };
 
+enum proj_fire_mode{
+    /* Fire the projectile in an arc, which will
+     * take longer to reach its' target */
+    FIRE_MODE_HIGH,
+    /* Fire the projectile more directly, in a way
+     * that will take the minimum time. */
+    FIRE_MODE_LOW
+};
+
+struct proj_fire_desc{
+    /* How many frames into the "fire" animation
+     * do we launch it? */
+    size_t              frame_offset;
+    enum proj_fire_mode fire_mode;
+    /* The name of the bone of the firing entity 
+     * from which the projectile will be spawned. 
+     * A first byte of NUL (0) means the value is 
+     * not used. */
+    char                bone_name[64];
+    /* When present, this is the offset from the 
+     * position of bone_name bone. When bone_name
+     * is not used, this is the offset from the local
+     * origin. */
+    vec3_t              offset;
+};
+
 void  G_Combat_AttackUnit(uint32_t uid, uint32_t target);
 
 void  G_Combat_SetStance(uint32_t uid, enum combat_stance stance);
@@ -311,6 +337,7 @@ int   G_Combat_GetMaxHP(uint32_t uid);
 void  G_Combat_SetRange(uint32_t uid, float range);
 float G_Combat_GetRange(uint32_t uid);
 void  G_Combat_SetProjDesc(uint32_t uid, const struct proj_desc *pd);
+void  G_Combat_SetProjFireDesc(uint32_t uid, const struct proj_fire_desc *fd);
 void  G_Combat_SetCorpseModel(uint32_t uid, const char *dir, const char *pfobj, vec3_t scale);
 
 enum combat_stance G_Combat_GetStance(uint32_t uid);

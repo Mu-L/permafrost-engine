@@ -149,7 +149,8 @@ struct combatstate{
     vec2_t             move_cmd_xz;
     uint32_t           attack_start_tick;
     /* only used by ranged entities */
-    struct proj_desc   pd;
+    struct proj_desc      pd;
+    struct proj_fire_desc fd;
     /* Optional model to be displayed after an entity's death */
     const char        *corpse_dir;
     const char        *corpse_pfobj;
@@ -235,6 +236,7 @@ enum combat_cmd_type{
     COMBAT_CMD_CLEAR_SAVED_MOVE_CMD,
     COMBAT_CMD_ADD_TIME_DELTA,
     COMBAT_CMD_SET_PROJ_DESC,
+    COMBAT_CMD_SET_PROJ_FIRE_DESC,
     COMBAT_CMD_SET_CORPSE_MODEL,
     COMBAT_CMD_PROJ_HIT
 };
@@ -353,6 +355,16 @@ static struct proj_desc combat_default_proj(void)
         .pfobj = pf_strdup("arrow.pfobj"),
         .scale = (vec3_t){12.0, 12.0, 12.0},
         .speed = PROJECTILE_DEFAULT_SPEED,
+    };
+}
+
+static struct proj_fire_desc combat_default_fire(void)
+{
+    return (struct proj_fire_desc){
+        .frame_offset = 0,
+        .fire_mode = FIRE_MODE_LOW,
+        .bone_name = {0},
+        .offset = (vec3_t){0},
     };
 }
 
@@ -825,6 +837,7 @@ static void do_add_entity(uint32_t uid, enum combat_stance initial)
         .sticky = false,
         .move_cmd_interrupted = false,
         .pd = combat_default_proj(),
+        .fd = combat_default_fire(),
         .corpse_dir = NULL,
         .corpse_pfobj = NULL,
     };
@@ -1136,6 +1149,15 @@ static void do_set_proj_desc(uint32_t uid, const struct proj_desc *pd)
         pd->scale,
         pd->speed,
     };
+}
+
+static void do_set_proj_fire_desc(uint32_t uid, const struct proj_fire_desc *fd)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    cs->fd = *fd;
 }
 
 static void do_set_corpse_model(uint32_t uid, const char *dir, const char *pfobj, vec3_t scale)
@@ -1807,6 +1829,12 @@ static void combat_process_cmds(void)
             PF_FREE(pd->basedir);
             PF_FREE(pd->pfobj);
             PF_FREE(pd);
+            break;
+        }
+        case COMBAT_CMD_SET_PROJ_FIRE_DESC: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            struct proj_fire_desc *fd = cmd.args[1].val.as_pointer;
+            do_set_proj_fire_desc(uid, fd);
             break;
         }
         case COMBAT_CMD_SET_CORPSE_MODEL: {
@@ -2786,6 +2814,26 @@ void G_Combat_SetProjDesc(uint32_t uid, const struct proj_desc *pd)
     });
 }
 
+void G_Combat_SetProjFireDesc(uint32_t uid, const struct proj_fire_desc *fd)
+{
+    struct proj_fire_desc *copy = malloc(sizeof(struct proj_fire_desc));
+    if(!copy)
+        return;
+    *copy = *fd;
+
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_SET_PROJ_FIRE_DESC,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_POINTER,
+            .val.as_pointer = copy
+        }
+    });
+}
+
 float G_Combat_GetRange(uint32_t uid)
 {
     struct combat_cmd *cmd;
@@ -2957,6 +3005,32 @@ bool G_Combat_SaveState(struct SDL_RWops *stream)
             .val.as_float = curr.pd.speed,
         };
         CHK_TRUE_RET(Attr_Write(stream, &pd_speed, "pd_speed"));
+        Sched_TryYield();
+
+        struct attr fd_frame_offset  = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr.fd.frame_offset,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &fd_frame_offset, "fd_frame_offset"));
+
+        struct attr fd_fire_mode  = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr.fd.fire_mode,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &fd_fire_mode, "fd_fire_mode"));
+
+        struct attr fd_bone_name  = (struct attr){
+            .type = TYPE_STRING,
+        };
+        pf_strlcpy(fd_bone_name.val.as_string, curr.fd.bone_name,
+            sizeof(fd_bone_name.val.as_string));
+        CHK_TRUE_RET(Attr_Write(stream, &fd_bone_name, "fd_bone_name"));
+
+        struct attr fd_offset  = (struct attr){
+            .type = TYPE_VEC3,
+            .val.as_vec3 = curr.fd.offset,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &fd_offset, "fd_offset"));
         Sched_TryYield();
 
         struct attr corpse_basedir = (struct attr){
@@ -3147,6 +3221,26 @@ bool G_Combat_LoadState(struct SDL_RWops *stream)
         CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
         CHK_TRUE_RET(attr.type == TYPE_FLOAT);
         cs->pd.speed = attr.val.as_float;
+        Sched_TryYield();
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        cs->fd.frame_offset = attr.val.as_int;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        cs->fd.fire_mode = attr.val.as_int;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_STRING);
+        cs->fd.bone_name[0] = 0;
+        if(strcmp(attr.val.as_string, "NULL") != 0) {
+            pf_strlcpy(cs->fd.bone_name, attr.val.as_string, sizeof(cs->fd.bone_name));
+        }
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC3);
+        cs->fd.offset = attr.val.as_vec3;
         Sched_TryYield();
 
         CHK_TRUE_RET(Attr_Parse(stream, &attr, true));

@@ -42,6 +42,7 @@
 #include "../sched.h"
 #include "../entity.h"
 #include "../asset_load.h"
+#include "../sprite.h"
 #include "../map/public/tile.h"
 #include "../game/public/game.h"
 #include "../render/public/render.h"
@@ -50,6 +51,7 @@
 #include "../lib/public/stalloc.h"
 #include "../lib/public/attr.h"
 #include "../lib/public/pf_string.h"
+#include "../lib/public/string_intern.h"
 
 #include <math.h>
 #include <assert.h>
@@ -73,16 +75,23 @@
     }while(0)
 
 struct projectile{
-    uint32_t uid;
-    uint32_t ent_parent;
-    uint32_t cookie;
-    uint32_t flags;
-    int      faction_id;
-    void    *render_private;
-    vec3_t   pos;
-    vec3_t   vel;
-    vec3_t   scale;
-    mat4x4_t model;
+    uint32_t                 uid;
+    uint32_t                 ent_parent;
+    uint32_t                 cookie;
+    uint32_t                 flags;
+    int                      faction_id;
+    void                    *render_private;
+    vec3_t                   pos;
+    vec3_t                   vel;
+    vec3_t                   scale;
+    mat4x4_t                 model;
+    enum proj_desc_flags     sprite_flags;
+    struct sprite_sheet_desc impact_sprite;
+    vec2_t                   impact_size;
+    struct sprite_sheet_desc trail_sprite;
+    vec2_t                   trail_size;
+    float                    trail_freq;
+    vec3_t                   prev_trail_pos;
 };
 
 struct proj_task_arg{
@@ -114,6 +123,9 @@ static struct memstack  s_eventargs;
 
 static unsigned long    s_last_tick = ULONG_MAX;
 static unsigned         s_simticks = 0;
+
+static khash_t(stridx) *s_stridx;
+static mp_strbuff_t     s_stringpool;
 
 /*****************************************************************************/
 /* STATIC FUNCTIONS                                                          */
@@ -183,6 +195,10 @@ static struct result phys_proj_task(void *arg)
     return NULL_RESULT;
 }
 
+static void phys_show_impact_sprite(const struct projectile *curr)
+{
+}
+
 static void phys_filter_out_of_bounds(void)
 {
     for(int i = vec_size(&s_front)-1; i >= 0; i--) {
@@ -190,6 +206,9 @@ static void phys_filter_out_of_bounds(void)
         const struct projectile *curr = &vec_AT(&s_front, i);
         if(curr->pos.y < -Z_COORDS_PER_TILE) {
             E_Global_Notify(EVENT_PROJECTILE_DISAPPEAR, (void*)((uintptr_t)curr->uid), ES_ENGINE);
+            if(curr->sprite_flags & PROJ_HAS_IMPACT_SPRITE) {
+                Sprite_PlayAnim(1, 24, curr->impact_size, curr->impact_sprite, curr->pos);
+            }
             vec_proj_push(&s_deleted, *curr);
             vec_proj_del(&s_front, i);
         }
@@ -218,6 +237,21 @@ static void phys_proj_finish_work(void)
     vec_proj_t tmp = s_back;
     s_back = s_front;
     s_front = tmp;
+}
+
+static void phys_proj_spawn_trails(void)
+{
+    for(int i = 0; i < vec_size(&s_front); i++) {
+        struct projectile *curr = &vec_AT(&s_front, i);
+        if(!(curr->flags & PROJ_HAS_TRAIL_SPRITE))
+            continue;
+        vec3_t delta;
+        PFM_Vec3_Sub(&curr->pos, &curr->prev_trail_pos, &delta);
+        if(PFM_Vec3_Len(&delta) < curr->trail_freq)
+            continue;
+        Sprite_PlayAnim(1, 24, curr->trail_size, curr->trail_sprite, curr->pos);
+        curr->prev_trail_pos = curr->pos;
+    }
 }
 
 static bool phys_enemies(int faction_id, uint32_t ent)
@@ -296,6 +330,10 @@ static void phys_sweep_test(int front_idx)
         hit->cookie = proj->cookie;
         E_Global_Notify(EVENT_PROJECTILE_HIT, hit, ES_ENGINE);
 
+        if(proj->sprite_flags & PROJ_HAS_IMPACT_SPRITE) {
+            Sprite_PlayAnim(1, 24, proj->impact_size, proj->impact_sprite, proj->pos);
+        }
+
         vec_proj_push(&s_deleted, *proj);
         vec_proj_del(&s_front, front_idx);
     }
@@ -306,6 +344,7 @@ static void on_30hz_tick(void *user, void *event)
     PERF_PUSH("projectile::on_30hz_tick");
 
     phys_proj_finish_work();
+    phys_proj_spawn_trails();
 
     vec_proj_copy(&s_back, &s_front);
     vec_proj_concat(&s_back, &s_added);
@@ -453,7 +492,20 @@ uint32_t P_Projectile_Add(vec3_t origin, vec3_t velocity, uint32_t ent_parent, i
         .pos = origin,
         .vel = velocity,
         .scale = pd.scale,
+        .sprite_flags = pd.flags,
+        .impact_sprite = pd.impact_sprite,
+        .impact_size = pd.impact_size,
+        .trail_sprite = pd.trail_sprite,
+        .trail_size = pd.trail_size,
+        .trail_freq = pd.trail_freq,
+        .prev_trail_pos = origin
     };
+    if(pd.flags & PROJ_HAS_IMPACT_SPRITE) {
+        proj.impact_sprite.filename = si_intern(pd.impact_sprite.filename, &s_stringpool, s_stridx);
+    }
+    if(pd.flags & PROJ_HAS_TRAIL_SPRITE) {
+        proj.trail_sprite.filename = si_intern(pd.trail_sprite.filename, &s_stringpool, s_stridx);
+    }
     vec_proj_push(&s_added, proj);
     return ret;
 }
@@ -474,6 +526,8 @@ void P_Projectile_Update(void)
 
 bool P_Projectile_Init(void)
 {
+    if(!si_init(&s_stringpool, &s_stridx, 2048))
+        goto fail_strintern;
     vec_proj_init(&s_front);
     if(!vec_proj_resize(&s_front, 1024))
         goto fail_front;
@@ -506,6 +560,8 @@ fail_added:
 fail_back:
     vec_proj_destroy(&s_front);
 fail_front:
+    si_shutdown(&s_stringpool, s_stridx);
+fail_strintern:
     return false;
 }
 
@@ -520,6 +576,7 @@ void P_Projectile_Shutdown(void)
     vec_proj_destroy(&s_back);
     vec_proj_destroy(&s_added);
     vec_proj_destroy(&s_deleted);
+    si_shutdown(&s_stringpool, s_stridx);
 }
 
 bool P_Projectile_VelocityForTarget(vec3_t src, vec3_t dst, float init_speed, 

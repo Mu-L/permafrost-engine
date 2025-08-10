@@ -207,9 +207,11 @@ static void do_draw_call(struct draw_call_desc desc, struct sprite_sheet_desc sh
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
-    glDeleteBuffers(1, &VAO);
+    glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
     glDeleteBuffers(1, &UBO);
+
+    GL_ASSERT_OK();
 }
 
 /*****************************************************************************/
@@ -243,6 +245,8 @@ void R_GL_SpriteRenderBatch(struct sprite_desc *sprites, size_t *nsprites,
     }
     glEnable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
+
     GL_PERF_POP_GROUP();
+    GL_ASSERT_OK();
 }
 

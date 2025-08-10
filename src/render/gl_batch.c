@@ -1578,6 +1578,7 @@ void R_GL_Batch_DrawWithID(struct render_input *in, enum batch_id *id)
     GL_PERF_ENTER();
     GL_PERF_PUSH_GROUP(0, "batch::DrawWithID");
 
+    R_GL_ShadowMapBind();
     batch_render_anim_all(&in->cam_vis_anim, true, RENDER_PASS_REGULAR);
     batch_render_stat_all(&in->cam_vis_stat, true, RENDER_PASS_REGULAR, *id);
 

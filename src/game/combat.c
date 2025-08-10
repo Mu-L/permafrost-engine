@@ -50,6 +50,7 @@
 #include "../sched.h"
 #include "../task.h"
 #include "../asset_load.h"
+#include "../sprite.h"
 #include "../phys/public/collision.h"
 #include "../render/public/render.h"
 #include "../render/public/render_ctrl.h"
@@ -862,6 +863,12 @@ static void do_remove_entity(uint32_t uid)
 
     PF_FREE(cs->pd.basedir);
     PF_FREE(cs->pd.pfobj);
+    if(cs->pd.flags & PROJ_HAS_IMPACT_SPRITE) {
+        PF_FREE(cs->pd.impact_sprite.filename);
+    }
+    if(cs->pd.flags & PROJ_HAS_TRAIL_SPRITE) {
+        PF_FREE(cs->pd.trail_sprite.filename);
+    }
 
     combat_dying_remove(uid);
     combatstate_remove(uid);
@@ -1142,13 +1149,13 @@ static void do_set_proj_desc(uint32_t uid, const struct proj_desc *pd)
 
     PF_FREE(cs->pd.basedir);
     PF_FREE(cs->pd.pfobj);
-
-    cs->pd = (struct proj_desc) {
-        pf_strdup(pd->basedir),
-        pf_strdup(pd->pfobj),
-        pd->scale,
-        pd->speed,
-    };
+    if(cs->pd.flags & PROJ_HAS_IMPACT_SPRITE) {
+        PF_FREE(cs->pd.impact_sprite.filename);
+    }
+    if(cs->pd.flags & PROJ_HAS_TRAIL_SPRITE) {
+        PF_FREE(cs->pd.trail_sprite.filename);
+    }
+    cs->pd = *pd;
 }
 
 static void do_set_proj_fire_desc(uint32_t uid, const struct proj_fire_desc *fd)
@@ -1870,8 +1877,6 @@ static void combat_process_cmds(void)
             uint32_t uid = cmd.args[0].val.as_int;
             struct proj_desc *pd = cmd.args[1].val.as_pointer;
             do_set_proj_desc(uid, pd);
-            PF_FREE(pd->basedir);
-            PF_FREE(pd->pfobj);
             PF_FREE(pd);
             break;
         }
@@ -2366,6 +2371,62 @@ static float hz_count(enum combat_hz hz)
     return 0;
 }
 
+static bool save_sprite_desc(const struct sprite_sheet_desc *desc, SDL_RWops *stream)
+{
+    struct attr filename = (struct attr){
+        .type = TYPE_STRING,
+        .val.as_string = "NULL"
+    };
+    if(desc->filename) {
+        pf_strlcpy(filename.val.as_string, desc->filename, sizeof(filename.val.as_string));
+    }
+    CHK_TRUE_RET(Attr_Write(stream, &filename, "sprite_filename"));
+
+    struct attr nrows = (struct attr){
+        .type = TYPE_INT,
+        .val.as_int = desc->nrows
+    };
+    CHK_TRUE_RET(Attr_Write(stream, &nrows, "sprite_nrows"));
+
+    struct attr ncols = (struct attr){
+        .type = TYPE_INT,
+        .val.as_int = desc->ncols
+    };
+    CHK_TRUE_RET(Attr_Write(stream, &ncols, "sprite_ncols"));
+
+    struct attr nframes = (struct attr){
+        .type = TYPE_INT,
+        .val.as_int = desc->nframes
+    };
+    CHK_TRUE_RET(Attr_Write(stream, &nframes, "sprite_nframes"));
+    return true;
+}
+
+static bool load_sprite_desc(struct sprite_sheet_desc *desc, SDL_RWops *stream)
+{
+    struct attr attr;
+    CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+    CHK_TRUE_RET(attr.type == TYPE_STRING);
+    desc->filename = NULL;
+    if(strcmp(attr.val.as_string, "NULL") != 0) {
+        desc->filename = pf_strdup(attr.val.as_string);
+    }
+
+    CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+    CHK_TRUE_RET(attr.type == TYPE_INT);
+    desc->nrows = attr.val.as_int;
+
+    CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+    CHK_TRUE_RET(attr.type == TYPE_INT);
+    desc->ncols = attr.val.as_int;
+
+    CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+    CHK_TRUE_RET(attr.type == TYPE_INT);
+    desc->nframes = attr.val.as_int;
+
+    return true;
+}
+
 /*****************************************************************************/
 /* EXTERN FUNCTIONS                                                          */
 /*****************************************************************************/
@@ -2839,12 +2900,12 @@ void G_Combat_SetProjDesc(uint32_t uid, const struct proj_desc *pd)
     struct proj_desc *copy = malloc(sizeof(struct proj_desc));
     if(!copy)
         return;
-    *copy = (struct proj_desc){
-        pf_strdup(pd->basedir),
-        pf_strdup(pd->pfobj),
-        pd->scale,
-        pd->speed,
-    };
+    *copy = *pd;
+    copy->basedir = pf_strdup(pd->basedir);
+    copy->pfobj = pf_strdup(pd->pfobj);
+    if(pd->flags & PROJ_HAS_IMPACT_SPRITE) {
+        copy->impact_sprite.filename = pf_strdup(pd->impact_sprite.filename);
+    }
 
     combat_push_cmd((struct combat_cmd){
         .type = COMBAT_CMD_SET_PROJ_DESC,
@@ -3050,6 +3111,35 @@ bool G_Combat_SaveState(struct SDL_RWops *stream)
             .val.as_float = curr.pd.speed,
         };
         CHK_TRUE_RET(Attr_Write(stream, &pd_speed, "pd_speed"));
+
+        struct attr pd_flags = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr.pd.flags,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &pd_flags, "pd_flags"));
+        Sched_TryYield();
+
+        CHK_TRUE_RET(save_sprite_desc(&curr.pd.impact_sprite, stream));
+
+        struct attr pd_impact_size = (struct attr){
+            .type = TYPE_VEC2,
+            .val.as_vec2 = curr.pd.impact_size,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &pd_impact_size, "pd_impact_size"));
+
+        CHK_TRUE_RET(save_sprite_desc(&curr.pd.trail_sprite, stream));
+
+        struct attr pd_trail_size = (struct attr){
+            .type = TYPE_VEC2,
+            .val.as_vec2 = curr.pd.trail_size,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &pd_trail_size, "pd_trail_size"));
+
+        struct attr pd_trail_freq = (struct attr){
+            .type = TYPE_FLOAT,
+            .val.as_float = curr.pd.trail_freq,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &pd_trail_freq, "pd_trail_freq"));
         Sched_TryYield();
 
         struct attr fd_frame_offset  = (struct attr){
@@ -3267,6 +3357,26 @@ bool G_Combat_LoadState(struct SDL_RWops *stream)
         CHK_TRUE_RET(attr.type == TYPE_FLOAT);
         cs->pd.speed = attr.val.as_float;
         Sched_TryYield();
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        cs->pd.flags = attr.val.as_int;
+
+        CHK_TRUE_RET(load_sprite_desc(&cs->pd.impact_sprite, stream));
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC2);
+        cs->pd.impact_size = attr.val.as_vec2;
+
+        CHK_TRUE_RET(load_sprite_desc(&cs->pd.trail_sprite, stream));
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC2);
+        cs->pd.trail_size = attr.val.as_vec2;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_FLOAT);
+        cs->pd.trail_freq = attr.val.as_float;
 
         CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
         CHK_TRUE_RET(attr.type == TYPE_INT);

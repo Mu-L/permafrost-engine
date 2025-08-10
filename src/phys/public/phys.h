@@ -40,6 +40,7 @@ struct obb;
 struct SDL_RWops;
 
 #include "../../pf_math.h"
+#include "../../sprite.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -55,11 +56,22 @@ struct proj_hit{
     uint32_t cookie;
 };
 
+enum proj_desc_flags{
+    PROJ_HAS_IMPACT_SPRITE  = (1 << 0),
+    PROJ_HAS_TRAIL_SPRITE   = (1 << 1)
+};
+
 struct proj_desc{
-    const char *basedir;
-    const char *pfobj;
-    vec3_t      scale;
-    float       speed;
+    const char              *basedir;
+    const char              *pfobj;
+    vec3_t                   scale;
+    float                    speed;
+    enum proj_desc_flags     flags;
+    struct sprite_sheet_desc impact_sprite;
+    vec2_t                   impact_size;
+    struct sprite_sheet_desc trail_sprite;
+    vec2_t                   trail_size;
+    float                    trail_freq; /* In distance travelled */
 };
 
 enum proj_fire_mode{

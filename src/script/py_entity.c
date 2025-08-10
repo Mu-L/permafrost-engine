@@ -2555,18 +2555,68 @@ static int PyCombatableEntity_init(PyCombatableEntityObject *self, PyObject *arg
         const char *dir, *pfobj;
         vec3_t scale;
         float speed;
+        PyObject *impact_sprite_obj = NULL;
+        PyObject *trail_sprite_obj = NULL;
+        int proj_flags = 0;
 
-        if(!PyTuple_Check(proj_desc) || !PyArg_ParseTuple(proj_desc, "ss(fff)f", 
-            &dir, &pfobj, &scale.x, &scale.y, &scale.z, &speed)) {
-            PyErr_SetString(PyExc_TypeError, "Optional 'projectile_descriptor' keyword argument must be a tuple of 4 items: "
-                "pfobj directory (string), pfobj name (string), scale (tuple of 3 floats), speed (float).");
+        if(!PyTuple_Check(proj_desc) || !PyArg_ParseTuple(proj_desc, "ss(fff)f|OO", 
+            &dir, &pfobj, &scale.x, &scale.y, &scale.z, &speed, &impact_sprite_obj,
+            &trail_sprite_obj)) {
+            PyErr_SetString(PyExc_TypeError, "Optional 'projectile_descriptor' keyword argument "
+                "must be a tuple of 4 items: pfobj directory (string), pfobj name (string), scale "
+                "(tuple of 3 floats), speed (float).");
             return -1;
         }
-        struct proj_desc pd = (struct proj_desc) {
+
+        struct sprite_sheet_desc impact_sprite = {0};
+        vec2_t impact_size = (vec2_t){0};
+        if(impact_sprite_obj == NULL) {
+            /* No-op */
+        }else if(PyTuple_Check(impact_sprite_obj) 
+        && PyArg_ParseTuple(impact_sprite_obj, "(snnn)(ff)",
+            &impact_sprite.filename, &impact_sprite.nrows, &impact_sprite.ncols, 
+            &impact_sprite.nframes, &impact_size.x, &impact_size.y)) {
+
+            proj_flags |= PROJ_HAS_IMPACT_SPRITE;
+
+        }else if(impact_sprite_obj != Py_None) {
+            PyErr_SetString(PyExc_TypeError, "The impact sprite descriptor must be a tuple of "
+                "2 tuples. The first tuple is (filename, nrows, ncols, nframes) and the second "
+                "tuple is (size_x, size_y)");
+            return -1;
+        }
+
+        struct sprite_sheet_desc trail_sprite = {0};
+        vec2_t trail_size = (vec2_t){0};
+        float trail_freq = 0.0f;
+        if(trail_sprite_obj == NULL) {
+            /* No-op */
+        }else if(PyTuple_Check(trail_sprite_obj) 
+        && PyArg_ParseTuple(trail_sprite_obj, "(snnn)(ff)f",
+            &trail_sprite.filename, &trail_sprite.nrows, &trail_sprite.ncols, 
+            &trail_sprite.nframes, &trail_size.x, &trail_size.y, &trail_freq)) {
+
+            proj_flags |= PROJ_HAS_TRAIL_SPRITE;
+
+        }else if(trail_sprite_obj != Py_None) {
+            PyErr_SetString(PyExc_TypeError, "The trail sprite descriptor must be a tuple of "
+                "3 objects. The first tuple is (filename, nrows, ncols, nframes), the second "
+                "tuple is (size_x, size_y), and the last object is the trail spawn frequency "
+                "in OpenGL distance units.");
+            return -1;
+        }
+
+        struct proj_desc pd = (struct proj_desc){
             .basedir = dir,
             .pfobj = pfobj,
             .scale = scale,
             .speed = speed,
+            .flags = proj_flags,
+            .impact_sprite = impact_sprite,
+            .impact_size = impact_size,
+            .trail_sprite = trail_sprite,
+            .trail_size = trail_size,
+            .trail_freq = trail_freq
         };
         G_Combat_SetProjDesc(self->super.ent, &pd);
     }

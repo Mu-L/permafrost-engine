@@ -151,7 +151,7 @@ void   R_GL_SetLightPos(const vec3_t *pos);
  *
  * ---------------------------------------------------------------------------
  */
-void   R_GL_DrawSkeleton(uint32_t uid, const struct skeleton *skel, 
+void   R_GL_DrawSkeleton(mat4x4_t *model, const struct skeleton *skel, 
                          const struct camera *cam);
 
 /* ---------------------------------------------------------------------------

@@ -58,10 +58,10 @@
 
 #define PHYS_HZ         (30)
 #define UNITS_PER_METER (7.5f)
-/* Everyone knows moon physics are just more fun ;) */
-#define GRAVITY         (1.62f * UNITS_PER_METER / (PHYS_HZ * PHYS_HZ))
+#define GRAVITY         (5.00f * UNITS_PER_METER / (PHYS_HZ * PHYS_HZ))
 #define EPSILON         (1.0f/1024)
 #define MIN(a, b)       ((a) < (b) ? (a) : (b))
+#define MAX(a, b)       ((a) > (b) ? (a) : (b))
 #define ARR_SIZE(a)     (sizeof(a)/sizeof(a[0]))
 #define MAX_PROJ_TASKS  (64)
 #define NEAR_TOLERANCE  (100.0f)
@@ -522,7 +522,8 @@ void P_Projectile_Shutdown(void)
     vec_proj_destroy(&s_deleted);
 }
 
-bool P_Projectile_VelocityForTarget(vec3_t src, vec3_t dst, float init_speed, vec3_t *out)
+bool P_Projectile_VelocityForTarget(vec3_t src, vec3_t dst, float init_speed, 
+                                    enum proj_fire_mode mode, vec3_t *out)
 {
     vec3_t delta;
     PFM_Vec3_Sub(&dst, &src, &delta);
@@ -566,7 +567,11 @@ bool P_Projectile_VelocityForTarget(vec3_t src, vec3_t dst, float init_speed, ve
     t1 = pow(v, 2) + sqrt(descriminant);
     if(nsolutions > 1) {
         t2 = pow(v, 2) - sqrt(descriminant);
-        tan_theta = MIN(t1, t2) / (g * x);
+        if(mode == FIRE_MODE_LOW) {
+            tan_theta = MIN(t1, t2) / (g * x);
+        }else{
+            tan_theta = MAX(t1, t2) / (g * x);
+        }
     }else{
         tan_theta = t1 / (g * x);
     }

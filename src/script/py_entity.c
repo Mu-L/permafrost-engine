@@ -2783,7 +2783,7 @@ static int PyCombatableEntity_set_projectile_fire_desc(PyCombatableEntityObject 
     const char *bone_name = NULL;
     PyObject *opt_bone_name;
 
-    if(!PyTuple_Check(value) || !PyArg_ParseTuple(value, "iiO(fff)", &fd.frame_offset, 
+    if(!PyTuple_Check(value) || !PyArg_ParseTuple(value, "niO(fff)", &fd.frame_offset, 
         &fd.fire_mode, &opt_bone_name, &fd.offset.x, &fd.offset.y, &fd.offset.z)) {
 
         PyErr_SetString(PyExc_TypeError, "Arguments must be an integer (frame offset), an integer "

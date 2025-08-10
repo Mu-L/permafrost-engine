@@ -410,7 +410,7 @@ void R_GL_DrawLoadingScreen(const char *path)
     GL_PERF_RETURN_VOID();
 }
 
-void R_GL_DrawSkeleton(uint32_t uid, const struct skeleton *skel, const struct camera *cam)
+void R_GL_DrawSkeleton(mat4x4_t *model, const struct skeleton *skel, const struct camera *cam)
 {
     GL_PERF_ENTER();
     ASSERT_IN_RENDER_THREAD();
@@ -420,9 +420,6 @@ void R_GL_DrawSkeleton(uint32_t uid, const struct skeleton *skel, const struct c
 
     int width, height;
     Engine_WinDrawableSize(&width, &height);
-
-    mat4x4_t model;
-    Entity_ModelMatrix(uid, &model);
 
     /* Our vbuff looks like this:
      * +----------------+-------------+--------------+-----
@@ -460,7 +457,7 @@ void R_GL_DrawSkeleton(uint32_t uid, const struct skeleton *skel, const struct c
 
         vec4_t root_homo = {vbuff[vbuff_idx].x, vbuff[vbuff_idx].y, vbuff[vbuff_idx].z, 1.0f};
         vec4_t clip, tmpa, tmpb;
-        PFM_Mat4x4_Mult4x1(&model, &root_homo, &tmpa);
+        PFM_Mat4x4_Mult4x1(model, &root_homo, &tmpa);
         PFM_Mat4x4_Mult4x1(&view, &tmpa, &tmpb);
         PFM_Mat4x4_Mult4x1(&proj, &tmpb, &clip);
         vec3_t ndc = (vec3_t){ clip.x / clip.w, clip.y / clip.w, clip.z / clip.w };
@@ -489,7 +486,7 @@ void R_GL_DrawSkeleton(uint32_t uid, const struct skeleton *skel, const struct c
 
     R_GL_StateSet(GL_U_MODEL, (struct uval){
         .type = UTYPE_MAT4,
-        .val.as_mat4 = model
+        .val.as_mat4 = *model
     });
 
     R_GL_Shader_Install("mesh.static.colored");

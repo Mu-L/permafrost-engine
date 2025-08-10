@@ -119,6 +119,18 @@ const struct skeleton *A_GetCurrPoseSkeleton(uint32_t uid);
 const struct aabb     *A_GetCurrPoseAABB(uint32_t uid);
 
 /* ---------------------------------------------------------------------------
+ * Get the index of the current animation frame.
+ * ---------------------------------------------------------------------------
+ */
+int                    A_GetCurrFrameIndex(uint32_t uid);
+
+/* ---------------------------------------------------------------------------
+ * Try to get the current pose matrix for the specified bone.
+ * ---------------------------------------------------------------------------
+ */
+bool                   A_GetBoneCurrPoseMat(uint32_t uid, const char *bone, mat4x4_t *out_pose);
+
+/* ---------------------------------------------------------------------------
  * Add a time delta (in SDL ticks) to the start time of the previous frame.
  * This is used to shift the timestamps after pausing and resuming the game.
  * ---------------------------------------------------------------------------

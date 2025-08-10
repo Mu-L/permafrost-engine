@@ -62,13 +62,23 @@ struct proj_desc{
     float       speed;
 };
 
+enum proj_fire_mode{
+    /* Fire the projectile in an arc, which will
+     * take longer to reach its' target */
+    FIRE_MODE_HIGH,
+    /* Fire the projectile more directly, in a way
+     * that will take the minimum time. */
+    FIRE_MODE_LOW
+};
+
 bool     P_Projectile_Init(void);
 void     P_Projectile_Shutdown(void);
 
 uint32_t P_Projectile_Add(vec3_t origin, vec3_t velocity, uint32_t ent_parent, int faction_id, 
                           uint32_t cookie, int flags, struct proj_desc pd);
 void     P_Projectile_Update(void);
-bool     P_Projectile_VelocityForTarget(vec3_t src, vec3_t dst, float init_speed, vec3_t *out);
+bool     P_Projectile_VelocityForTarget(vec3_t src, vec3_t dst, float init_speed, 
+                                        enum proj_fire_mode mode, vec3_t *out);
 
 bool     P_Projectile_SaveState(struct SDL_RWops *stream);
 bool     P_Projectile_LoadState(struct SDL_RWops *stream);

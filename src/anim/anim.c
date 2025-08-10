@@ -340,6 +340,35 @@ const struct aabb *A_GetCurrPoseAABB(uint32_t uid)
     return &ctx->active->samples[ctx->curr_frame].sample_aabb;
 }
 
+int A_GetCurrFrameIndex(uint32_t uid)
+{
+    struct anim_ctx *ctx = a_ctx_for_uid(uid);
+    return ctx->curr_frame;
+}
+
+bool A_GetBoneCurrPoseMat(uint32_t uid, const char *bone, mat4x4_t *out_pose)
+{
+    struct anim_ctx *ctx = a_ctx_for_uid(uid);
+    const struct anim_data *data = ctx->data;
+
+    const struct skeleton *skel = &data->skel;
+    int joint_idx = -1;
+
+    for(int i = 0; i < skel->num_joints; i++) {
+        struct joint *curr = &skel->joints[i];
+        if(0 == strcmp(curr->name, bone)) {
+            joint_idx = i;
+            break;
+        }
+    }
+
+    if(joint_idx < 0)
+        return false;
+
+    a_make_pose_mat(uid, joint_idx, skel, out_pose);
+    return true;
+}
+
 void A_AddTimeDelta(uint32_t uid, uint32_t dt)
 {
     struct anim_ctx *ctx = a_ctx_for_uid(uid);

@@ -262,7 +262,7 @@ VEC_TYPE(corpse, struct corpse);
 VEC_IMPL(static, corpse, struct corpse);
 
 static void combat_push_cmd(struct combat_cmd cmd);
-static void on_attack_anim_finish(void *user, void *event);
+static void on_attack_anim_tick(void *user, void *event);
 static void on_death_anim_finish(void *user, void *event);
 static void do_stop_attack(uint32_t uid);
 static bool entity_dead(uint32_t uid);
@@ -650,7 +650,7 @@ static void entity_die(uint32_t uid)
         G_FlagsSet(uid, flags);
     }
 
-    E_Entity_Unregister(EVENT_ANIM_CYCLE_FINISHED, uid, on_attack_anim_finish);
+    E_Entity_Unregister(EVENT_UPDATE_START, uid, on_attack_anim_tick);
     E_Global_Notify(EVENT_ENTITY_DIED, (void*)((uintptr_t)uid), ES_ENGINE);
     E_Entity_Notify(EVENT_ENTITY_DEATH, uid, NULL, ES_ENGINE);
     vec_entity_push(&s_dying_ents, uid);
@@ -707,7 +707,7 @@ static void entity_melee_attack(uint32_t uid, uint32_t target)
     }
 }
 
-static void entity_ranged_attack(uint32_t uid, uint32_t target)
+static void entity_ranged_attack(uint32_t uid, uint32_t target, vec3_t proj_pos)
 {
     ASSERT_IN_MAIN_THREAD();
 
@@ -715,18 +715,18 @@ static void entity_ranged_attack(uint32_t uid, uint32_t target)
     struct combatstate *cs = combatstate_get(uid);
     assert(cs);
 
-    vec3_t ent_pos = Entity_CenterPos(uid);
     vec3_t target_pos = Entity_CenterPos(target);
     float ent_dmg = cs->stats.base_dmg;
 
     vec3_t vel;
-    if(!P_Projectile_VelocityForTarget(ent_pos, target_pos, cs->pd.speed, &vel)) {
+    if(!P_Projectile_VelocityForTarget(proj_pos, target_pos, cs->pd.speed, 
+        cs->fd.fire_mode, &vel)) {
         /* We resort to just shooting nothing when we can't hit our target. This case 
          * should never be hit so long as the initial velocity is high enough */
         return;
     }
 
-    P_Projectile_Add(ent_pos, vel, uid, G_GetFactionIDFrom(gs->faction_ids, uid), 
+    P_Projectile_Add(proj_pos, vel, uid, G_GetFactionIDFrom(gs->faction_ids, uid), 
         ent_dmg, PROJ_ONLY_HIT_COMBATABLE | PROJ_ONLY_HIT_ENEMIES, cs->pd);
 }
 
@@ -852,7 +852,7 @@ static void do_remove_entity(uint32_t uid)
     if(!cs)
         return;
 
-    E_Entity_Unregister(EVENT_ANIM_CYCLE_FINISHED, uid, on_attack_anim_finish);
+    E_Entity_Unregister(EVENT_UPDATE_START, uid, on_attack_anim_tick);
     E_Entity_Unregister(EVENT_ANIM_CYCLE_FINISHED, uid, on_death_anim_finish);
 
     if(cs->state == STATE_ATTACK_ANIM_PLAYING
@@ -867,7 +867,7 @@ static void do_remove_entity(uint32_t uid)
     combatstate_remove(uid);
 }
 
-static void do_tryhit(uint32_t uid)
+static void do_tryhit(uint32_t uid, vec3_t proj_pos)
 {
     ASSERT_IN_MAIN_THREAD();
 
@@ -892,7 +892,7 @@ static void do_tryhit(uint32_t uid)
 
     /* Ranged units fire their shot regardless */
     if(cs->stats.attack_range > 0.0f) {
-        entity_ranged_attack(uid, cs->target_uid);
+        entity_ranged_attack(uid, cs->target_uid, proj_pos);
         return;
     }
 
@@ -996,7 +996,7 @@ static void do_stop_attack(uint32_t uid)
     if(!cs)
         return;
 
-    E_Entity_Unregister(EVENT_ANIM_CYCLE_FINISHED, uid, on_attack_anim_finish);
+    E_Entity_Unregister(EVENT_UPDATE_START, uid, on_attack_anim_tick);
 
     if(cs->state == STATE_ATTACK_ANIM_PLAYING
     || cs->state == STATE_CAN_ATTACK) {
@@ -1171,15 +1171,57 @@ static void do_set_corpse_model(uint32_t uid, const char *dir, const char *pfobj
     cs->corpse_scale = scale;
 }
 
-static void on_attack_anim_finish(void *user, void *event)
+static vec3_t projectile_spawn_pos(uint32_t uid)
+{
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+
+    vec4_t proj_pos = (vec4_t){0};
+    if(cs->stats.attack_range > 0.0) {
+
+        mat4x4_t pose_mat;
+        mat4x4_t model;
+        Entity_ModelMatrix(uid, &model);
+        struct proj_fire_desc *fd = &cs->fd;
+
+        if(strlen(cs->fd.bone_name) > 0 
+        && A_GetBoneCurrPoseMat(uid, cs->fd.bone_name, &pose_mat)) {
+
+            vec4_t bone_pos_homo;
+            vec4_t offset_homo = (vec4_t){fd->offset.x, fd->offset.y, fd->offset.z, 1.0};
+
+            PFM_Mat4x4_Mult4x1(&pose_mat, &offset_homo, &bone_pos_homo);
+            PFM_Mat4x4_Mult4x1(&model, &bone_pos_homo, &proj_pos);
+        }else{
+            vec3_t center = Entity_CenterPos(uid);
+            PFM_Vec3_Add(&center, &fd->offset, &center);
+            vec4_t offset_homo = (vec4_t){center.x, center.y, center.z, 1.0f};
+            PFM_Mat4x4_Mult4x1(&model, &offset_homo, &proj_pos);
+        }
+    }
+    return (vec3_t){proj_pos.x, proj_pos.y, proj_pos.z};
+}
+
+static void on_attack_anim_tick(void *user, void *event)
 {
     uint32_t self = (uintptr_t)user;
-    E_Entity_Unregister(EVENT_ANIM_CYCLE_FINISHED, self, on_attack_anim_finish);
+    int curr_frame = A_GetCurrFrameIndex(self);
+    struct combatstate *cs = combatstate_get(self);
+    assert(cs);
+
+    if(curr_frame != cs->fd.frame_offset)
+        return;
+
+    E_Entity_Unregister(EVENT_UPDATE_START, self, on_attack_anim_tick);
     combat_push_cmd((struct combat_cmd){
         .type = COMBAT_CMD_TRYHIT,
         .args[0] = (struct attr){
             .type = TYPE_INT,
             .val.as_int = self
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_VEC3,
+            .val.as_vec3 = projectile_spawn_pos(self)
         }
     });
 }
@@ -1606,7 +1648,7 @@ static void entity_apply_update(struct combat_work_out *out)
     }
     case COMBAT_ACTION_ANIMATED_ATTACK: {
         uint32_t uid = out->action_args[0].val.as_int;
-        E_Entity_Register(EVENT_ANIM_CYCLE_FINISHED, uid, on_attack_anim_finish, 
+        E_Entity_Register(EVENT_UPDATE_START, uid, on_attack_anim_tick, 
             (void*)((uintptr_t)uid), G_RUNNING);
         break;
     }
@@ -1622,7 +1664,8 @@ static void entity_apply_update(struct combat_work_out *out)
     }
     case COMBAT_ACTION_TRYHIT: {
         uint32_t uid = out->action_args[0].val.as_int;
-        do_tryhit(uid);
+        vec3_t proj_pos = projectile_spawn_pos(uid);
+        do_tryhit(uid, proj_pos);
         break;
     }
     default:
@@ -1743,7 +1786,8 @@ static void combat_process_cmds(void)
         }
         case COMBAT_CMD_TRYHIT: {
             uint32_t uid = cmd.args[0].val.as_int;
-            do_tryhit(uid);
+            vec3_t proj_pos = cmd.args[1].val.as_vec3;
+            do_tryhit(uid, proj_pos);
             break;
         }
         case COMBAT_CMD_SET_STANCE: {
@@ -1835,6 +1879,7 @@ static void combat_process_cmds(void)
             uint32_t uid = cmd.args[0].val.as_int;
             struct proj_fire_desc *fd = cmd.args[1].val.as_pointer;
             do_set_proj_fire_desc(uid, fd);
+            PF_FREE(fd);
             break;
         }
         case COMBAT_CMD_SET_CORPSE_MODEL: {
@@ -2388,7 +2433,7 @@ void G_Combat_Shutdown(void)
 
     uint32_t uid;
     kh_foreach_key(s_entity_state_table, uid, {
-        E_Entity_Unregister(EVENT_ANIM_CYCLE_FINISHED, uid, on_attack_anim_finish);
+        E_Entity_Unregister(EVENT_UPDATE_START, uid, on_attack_anim_tick);
         E_Entity_Unregister(EVENT_ANIM_CYCLE_FINISHED, uid, on_death_anim_finish);
     });
 
@@ -3182,7 +3227,7 @@ bool G_Combat_LoadState(struct SDL_RWops *stream)
 
         if(cs->state == STATE_ATTACK_ANIM_PLAYING) {
             CHK_TRUE_RET(G_EntityExists(uid));
-            E_Entity_Register(EVENT_ANIM_CYCLE_FINISHED, uid, on_attack_anim_finish, 
+            E_Entity_Register(EVENT_UPDATE_START, uid, on_attack_anim_tick, 
                 (void*)((uintptr_t)uid), G_RUNNING);
         }
 

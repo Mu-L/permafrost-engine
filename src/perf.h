@@ -81,13 +81,16 @@
 
 #endif
 
-#define NFRAMES_LOGGED  (5)
+#define NFRAMES_LOGGED        (5)
+#define PERF_GPU_STAT_COUNT   (6)
+#define PERF_NAV_TICK_HISTORY (64)
 
 struct gpu_mem_accounting;
 
 /* Curated memory snapshot mixing mimalloc internal counters with OS-level
  * accounting. The Vm* fields are populated only on Linux debug builds and
- * read as zero otherwise. */
+ * read as zero otherwise. 
+ */
 struct perf_mem_stats{
     int64_t  mi_malloc_normal_current;
     int64_t  mi_malloc_normal_total;
@@ -98,7 +101,8 @@ struct perf_mem_stats{
 };
 
 /* GPU video memory counters (NVX_gpu_memory_info), in KB; zeroes if the
- * extension is unavailable. */
+ * extension is unavailable. 
+ */
 struct vram_stats{
     int dedicated_kb;
     int total_available_kb;
@@ -120,7 +124,14 @@ struct gpu_frame_stats{
     uint64_t frag_invocations;
 };
 
-#define PERF_GPU_STAT_COUNT (6)
+
+/* Wall-time of a single completed navigation tick and its per-tick budget
+ * (1000/hz), in microseconds.
+ */
+struct nav_tick_sample{
+    uint32_t dur_us;
+    uint32_t budget_us;
+};
 
 struct perf_info{
     char threadname[64];
@@ -157,7 +168,8 @@ bool     Perf_IsRoot(void);
  */
 
 /* This returns an array of perf_info structs (one for each thread). They
- * must be 'free'd by the caller. */
+ * must be 'free'd by the caller. 
+ */
 size_t   Perf_Report(size_t maxout, struct perf_info **out);
 void     Perf_GetMemoryStats(struct perf_mem_stats *out);
 void     Perf_GetVramStats(struct vram_stats *out);
@@ -168,8 +180,15 @@ uint32_t Perf_LastFrameMS(void);
 uint32_t Perf_CurrFrameMS(void);
 uint64_t Perf_LastFrameAllocdBytes(void);
 
+/* Navigation-task wall-time history (one sample per completed nav tick), feeding
+ * the perf window's live graph. Recorded from the main thread at the nav-tick join.
+ */
+void     Perf_RecordNavTick(uint32_t dur_us, uint32_t budget_us);
+size_t   Perf_GetNavTickTimes(size_t maxout, struct nav_tick_sample *out);
+
 /* The following can only be called from the main thread, making sure that 
- * none of the other threads are touching the Perf_ API concurrently */
+ * none of the other threads are touching the Perf_ API concurrently 
+ */
 bool     Perf_Init(void);
 void     Perf_Shutdown(void);
 bool     Perf_RegisterThread(SDL_threadID tid, const char *name);

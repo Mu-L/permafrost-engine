@@ -176,6 +176,10 @@ static uint32_t               s_gpu_stat_cookies[NFRAMES_LOGGED][PERF_GPU_STAT_C
 static bool                   s_gpu_stat_valid[NFRAMES_LOGGED];
 static struct gpu_frame_stats s_gpu_frame_stats[NFRAMES_LOGGED];
 
+static struct nav_tick_sample s_nav_tick_hist[PERF_NAV_TICK_HISTORY];
+static size_t                 s_nav_tick_head;
+static size_t                 s_nav_tick_count;
+
 /*****************************************************************************/
 /* STATIC FUNCTIONS                                                          */
 /*****************************************************************************/
@@ -902,6 +906,25 @@ void Perf_GetGpuFrameStats(struct gpu_frame_stats *out)
 {
     int read_idx = (s_last_idx + 1) % NFRAMES_LOGGED;
     *out = s_gpu_frame_stats[read_idx];
+}
+
+void Perf_RecordNavTick(uint32_t dur_us, uint32_t budget_us)
+{
+    ASSERT_IN_MAIN_THREAD();
+    s_nav_tick_hist[s_nav_tick_head] = (struct nav_tick_sample){dur_us, budget_us};
+    s_nav_tick_head = (s_nav_tick_head + 1) % PERF_NAV_TICK_HISTORY;
+    if(s_nav_tick_count < PERF_NAV_TICK_HISTORY)
+        s_nav_tick_count++;
+}
+
+size_t Perf_GetNavTickTimes(size_t maxout, struct nav_tick_sample *out)
+{
+    ASSERT_IN_MAIN_THREAD();
+    size_t n = (maxout < s_nav_tick_count) ? maxout : s_nav_tick_count;
+    size_t start = (s_nav_tick_head + PERF_NAV_TICK_HISTORY - n) % PERF_NAV_TICK_HISTORY;
+    for(size_t i = 0; i < n; i++)
+        out[i] = s_nav_tick_hist[(start + i) % PERF_NAV_TICK_HISTORY];
+    return n;
 }
 
 void Perf_GetMemoryAccounting(struct mem_accounting *out)

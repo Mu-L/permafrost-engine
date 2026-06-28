@@ -3993,6 +3993,12 @@ static enum move_work_status nav_tick_finish_work(void)
     }
     PERF_POP();
     s_tick_task_tid = NULL_TID;
+
+    /* s_move_work.hz still holds the just-completed task's rate at this point. */
+    uint32_t dur_us = (uint32_t)s_tick_task_future.res.val.as_int;
+    uint32_t budget_us = 1000000u / hz_count(s_move_work.hz);
+    Perf_RecordNavTick(dur_us, budget_us);
+
     return WORK_COMPLETE;
 }
 
@@ -4256,6 +4262,7 @@ static void copy_gpu_results(void)
 static struct result navigation_tick_task(void *arg)
 {
     s_nav_task_active_tid = Sched_ActiveTID();
+    uint64_t nav_start = SDL_GetPerformanceCounter();
 
     N_ApplyDeferredInvalidations();
     compute_los_state();
@@ -4276,7 +4283,10 @@ static struct result navigation_tick_task(void *arg)
     fork_join_state_updates();
 
     s_nav_task_active_tid = NULL_TID;
-    return NULL_RESULT;
+
+    uint64_t freq = SDL_GetPerformanceFrequency();
+    uint32_t dur_us = freq ? (uint32_t)((SDL_GetPerformanceCounter() - nav_start) * 1000000ull / freq) : 0;
+    return (struct result){ .type = RESULT_INT, .val.as_int = dur_us };
 }
 
 /* Stopped held units aren't in the per-tick work; pivot them toward their combat facing here. */

@@ -136,6 +136,7 @@ static PyObject *PyPf_prev_frame_perfstats(PyObject *self);
 static PyObject *PyPf_prev_frame_memstats(PyObject *self);
 static PyObject *PyPf_prev_frame_vramstats(PyObject *self);
 static PyObject *PyPf_prev_frame_gpu_stats(PyObject *self);
+static PyObject *PyPf_get_nav_tick_times(PyObject *self);
 static PyObject *PyPf_prev_frame_mem_accounting(PyObject *self);
 static PyObject *PyPf_prev_frame_gpu_mem_accounting(PyObject *self);
 static PyObject *PyPf_mem_audit(PyObject *self);
@@ -410,6 +411,11 @@ static PyMethodDef pf_module_methods[] = {
     "Get a dictionary of GPU pipeline-statistics counters (vertices/primitives "
     "submitted, vertex/fragment-shader invocations, clipping input/output "
     "primitives) for the previous frame."},
+
+    {"get_nav_tick_times",
+    (PyCFunction)PyPf_get_nav_tick_times, METH_NOARGS,
+    "Get a list of (duration_us, budget_us) tuples for recent completed navigation "
+    "ticks, oldest-first, for the perf window's wall-time graph."},
 
     {"prev_frame_mem_accounting",
     (PyCFunction)PyPf_prev_frame_mem_accounting, METH_NOARGS,
@@ -1473,6 +1479,25 @@ static PyObject *PyPf_prev_frame_gpu_stats(PyObject *self)
         "clip_in_prims",    (unsigned long long)stats.clip_in_prims,
         "clip_out_prims",   (unsigned long long)stats.clip_out_prims,
         "frag_invocations", (unsigned long long)stats.frag_invocations);
+}
+
+static PyObject *PyPf_get_nav_tick_times(PyObject *self)
+{
+    struct nav_tick_sample samples[PERF_NAV_TICK_HISTORY];
+    size_t n = Perf_GetNavTickTimes(PERF_NAV_TICK_HISTORY, samples);
+
+    PyObject *list = PyList_New(n);
+    if(!list)
+        return NULL;
+    for(size_t i = 0; i < n; i++) {
+        PyObject *item = Py_BuildValue("(II)", samples[i].dur_us, samples[i].budget_us);
+        if(!item) {
+            Py_DECREF(list);
+            return NULL;
+        }
+        PyList_SET_ITEM(list, i, item);
+    }
+    return list;
 }
 
 static PyObject *mem_accounting_to_dict(const struct mem_accounting *acc)

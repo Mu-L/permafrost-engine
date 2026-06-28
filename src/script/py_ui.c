@@ -111,6 +111,7 @@ static PyObject *PyWindow_button_label(PyWindowObject *self, PyObject *args, PyO
 static PyObject *PyWindow_button_label_with_overlay(PyWindowObject *self, PyObject *args, PyObject *kwargs);
 static PyObject *PyWindow_animated_button_label(PyWindowObject *self, PyObject *args, PyObject *kwargs);
 static PyObject *PyWindow_simple_chart(PyWindowObject *self, PyObject *args);
+static PyObject *PyWindow_multi_chart(PyWindowObject *self, PyObject *args);
 static PyObject *PyWindow_selectable_label(PyWindowObject *self, PyObject *args);
 static PyObject *PyWindow_option_label(PyWindowObject *self, PyObject *args);
 static PyObject *PyWindow_edit_string(PyWindowObject *self, PyObject *args);
@@ -279,6 +280,11 @@ static PyMethodDef PyWindow_methods[] = {
     {"simple_chart", 
     (PyCFunction)PyWindow_simple_chart, METH_VARARGS,
     "Add a chart with a single slot."},
+
+    {"multi_chart",
+    (PyCFunction)PyWindow_multi_chart, METH_VARARGS,
+    "Add a line chart with multiple slots. Args: chart type, (min, max) tuple, a list "
+    "of series (each a list of ints), and optionally a list of per-series (r, g, b) colors."},
 
     {"selectable_label", 
     (PyCFunction)PyWindow_selectable_label, METH_VARARGS,
@@ -1123,6 +1129,67 @@ static PyObject *PyWindow_simple_chart(PyWindowObject *self, PyObject *args)
                 PyObject *ret = PyObject_CallObject(on_click_handler, args);
                 Py_DECREF(args);
                 Py_XDECREF(ret);
+            }
+        }
+    }
+    nk_chart_end(s_nk_ctx);
+
+    Py_RETURN_NONE;
+}
+
+static struct nk_color chart_slot_color(PyObject *color_list, int idx)
+{
+    struct nk_color col = (struct nk_color){0, 255, 0, 255};
+    if(color_list && PyList_Check(color_list) && idx < PyList_Size(color_list)) {
+        int r, g, b;
+        if(PyArg_ParseTuple(PyList_GetItem(color_list, idx), "iii", &r, &g, &b)) {
+            col = nk_rgb(r, g, b);
+        }else{
+            PyErr_Clear();
+        }
+    }
+    return col;
+}
+
+static PyObject *PyWindow_multi_chart(PyWindowObject *self, PyObject *args)
+{
+    int type;
+    long long min, max;
+    PyObject *series_list, *color_list = NULL;
+
+    if(!PyArg_ParseTuple(args, "i(LL)O|O", &type, &min, &max, &series_list, &color_list)) {
+        PyErr_SetString(PyExc_TypeError, "Expected: an integer chart type, a (min, max) tuple, a "
+            "list of series (each a list of integers), and optionally a list of (r, g, b) colors.");
+        return NULL;
+    }
+
+    if(!PyList_Check(series_list) || PyList_Size(series_list) == 0
+    || !PyList_Check(PyList_GetItem(series_list, 0))) {
+        PyErr_SetString(PyExc_TypeError, "Third argument must be a non-empty list of list-of-int series.");
+        return NULL;
+    }
+
+    int nseries = PyList_Size(series_list);
+    int num_datapoints = PyList_Size(PyList_GetItem(series_list, 0));
+
+    struct nk_color col0 = chart_slot_color(color_list, 0);
+    if(nk_chart_begin_colored(s_nk_ctx, type, col0, col0, num_datapoints, min, max)) {
+
+        for(int s = 1; s < nseries; s++) {
+            struct nk_color col = chart_slot_color(color_list, s);
+            nk_chart_add_slot_colored(s_nk_ctx, type, col, col, num_datapoints, min, max);
+        }
+
+        for(int i = 0; i < num_datapoints; i++) {
+            for(int s = 0; s < nseries; s++) {
+                PyObject *series = PyList_GetItem(series_list, s);
+                long val = 0;
+                if(PyList_Check(series) && i < PyList_Size(series)) {
+                    PyObject *elem = PyList_GetItem(series, i);
+                    if(PyInt_Check(elem) || PyLong_Check(elem))
+                        val = PyInt_AsLong(elem);
+                }
+                nk_chart_push_slot(s_nk_ctx, (float)val, s);
             }
         }
     }

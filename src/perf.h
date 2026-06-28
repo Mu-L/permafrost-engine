@@ -125,12 +125,15 @@ struct gpu_frame_stats{
 };
 
 
-/* Wall-time of a single completed navigation tick and its per-tick budget
- * (1000/hz), in microseconds.
+/* Per-tick navigation stats for the perf window. Times are in microseconds;
+ * total_us is serial_us plus the summed CPU of the parallel phases.
  */
 struct nav_tick_sample{
-    uint32_t dur_us;
-    uint32_t budget_us;
+    uint32_t dur_us;      /* wall-time */
+    uint32_t serial_us;   /* wall-time of the serial (non-parallelised) phases */
+    uint32_t total_us;    /* serial_us + summed parallel-task CPU */
+    uint32_t nwork;       /* entities processed this tick */
+    uint32_t budget_us;   /* per-tick budget (1000/hz) */
 };
 
 struct perf_info{
@@ -159,6 +162,13 @@ void     Perf_PopGPU(uint32_t cookie);
 
 bool     Perf_IsRoot(void);
 
+/* Per-nav-tick parallel-CPU accumulator. Thread-safe: the worker tasks add their
+ * CPU time, the nav fiber resets it at tick start and reads it at the end.
+ */
+void     Perf_NavParallelReset(void);
+void     Perf_NavParallelAddSince(uint64_t start_ticks);
+uint32_t Perf_NavParallelGet(void);
+
 /* Note that due to buffering of the frame timing data, the statistics
  * reported will be from NFRAMES_LOGGED ago. The reason for this is that
  * the GPU may be lagging a couple of frames behind the CPU. We want to get
@@ -183,7 +193,8 @@ uint64_t Perf_LastFrameAllocdBytes(void);
 /* Navigation-task wall-time history (one sample per completed nav tick), feeding
  * the perf window's live graph. Recorded from the main thread at the nav-tick join.
  */
-void     Perf_RecordNavTick(uint32_t dur_us, uint32_t budget_us);
+void     Perf_RecordNavTick(uint32_t dur_us, uint32_t serial_us, uint32_t total_us,
+                            uint32_t nwork, uint32_t budget_us);
 size_t   Perf_GetNavTickTimes(size_t maxout, struct nav_tick_sample *out);
 
 /* The following can only be called from the main thread, making sure that 

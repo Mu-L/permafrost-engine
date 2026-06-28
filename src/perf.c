@@ -52,6 +52,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <SDL_atomic.h>
 
 #if defined(__linux__) && !defined(NDEBUG)
 #include <linux/perf_event.h>
@@ -179,6 +180,7 @@ static struct gpu_frame_stats s_gpu_frame_stats[NFRAMES_LOGGED];
 static struct nav_tick_sample s_nav_tick_hist[PERF_NAV_TICK_HISTORY];
 static size_t                 s_nav_tick_head;
 static size_t                 s_nav_tick_count;
+static SDL_atomic_t           s_nav_parallel_us;
 
 /*****************************************************************************/
 /* STATIC FUNCTIONS                                                          */
@@ -908,13 +910,32 @@ void Perf_GetGpuFrameStats(struct gpu_frame_stats *out)
     *out = s_gpu_frame_stats[read_idx];
 }
 
-void Perf_RecordNavTick(uint32_t dur_us, uint32_t budget_us)
+void Perf_RecordNavTick(uint32_t dur_us, uint32_t serial_us, uint32_t total_us,
+                        uint32_t nwork, uint32_t budget_us)
 {
     ASSERT_IN_MAIN_THREAD();
-    s_nav_tick_hist[s_nav_tick_head] = (struct nav_tick_sample){dur_us, budget_us};
+    s_nav_tick_hist[s_nav_tick_head] = (struct nav_tick_sample){
+        dur_us, serial_us, total_us, nwork, budget_us};
     s_nav_tick_head = (s_nav_tick_head + 1) % PERF_NAV_TICK_HISTORY;
     if(s_nav_tick_count < PERF_NAV_TICK_HISTORY)
         s_nav_tick_count++;
+}
+
+void Perf_NavParallelReset(void)
+{
+    SDL_AtomicSet(&s_nav_parallel_us, 0);
+}
+
+void Perf_NavParallelAddSince(uint64_t start_ticks)
+{
+    uint64_t freq = SDL_GetPerformanceFrequency();
+    uint64_t us = freq ? (SDL_GetPerformanceCounter() - start_ticks) * 1000000ull / freq : 0;
+    SDL_AtomicAdd(&s_nav_parallel_us, (int)us);
+}
+
+uint32_t Perf_NavParallelGet(void)
+{
+    return (uint32_t)SDL_AtomicGet(&s_nav_parallel_us);
 }
 
 size_t Perf_GetNavTickTimes(size_t maxout, struct nav_tick_sample *out)

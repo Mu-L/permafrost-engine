@@ -2048,6 +2048,7 @@ static bool n_request_path(void *nav_private, vec2_t xz_src, vec2_t xz_dest, int
 
 static struct result field_task(void *arg)
 {
+    uint64_t t0 = SDL_GetPerformanceCounter();
     size_t *index = arg;
     struct field_work_in *in = &vec_AT(&s_field_work.in, *index);
     struct field_work_out *out = &vec_AT(&s_field_work.out, *index);
@@ -2056,6 +2057,7 @@ static struct result field_task(void *arg)
     N_FlowFieldUpdate(in->chunk, in->priv, in->faction_id, in->layer, in->target, 
         in->priv->unit_query_ctx, &out->field);
 
+    Perf_NavParallelAddSince(t0);
     return NULL_RESULT;
 }
 

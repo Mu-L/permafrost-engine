@@ -414,8 +414,8 @@ static PyMethodDef pf_module_methods[] = {
 
     {"get_nav_tick_times",
     (PyCFunction)PyPf_get_nav_tick_times, METH_NOARGS,
-    "Get a list of (duration_us, budget_us) tuples for recent completed navigation "
-    "ticks, oldest-first, for the perf window's wall-time graph."},
+    "Get a list of (wall_us, serial_us, total_us, nwork, budget_us) tuples for recent "
+    "completed navigation ticks, oldest-first, for the perf window's nav-tick stats."},
 
     {"prev_frame_mem_accounting",
     (PyCFunction)PyPf_prev_frame_mem_accounting, METH_NOARGS,
@@ -1490,7 +1490,8 @@ static PyObject *PyPf_get_nav_tick_times(PyObject *self)
     if(!list)
         return NULL;
     for(size_t i = 0; i < n; i++) {
-        PyObject *item = Py_BuildValue("(II)", samples[i].dur_us, samples[i].budget_us);
+        PyObject *item = Py_BuildValue("(IIIII)", samples[i].dur_us, samples[i].serial_us,
+            samples[i].total_us, samples[i].nwork, samples[i].budget_us);
         if(!item) {
             Py_DECREF(list);
             return NULL;

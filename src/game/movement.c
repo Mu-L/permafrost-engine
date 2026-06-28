@@ -482,6 +482,15 @@ static uint32_t                s_tick_task_tid = NULL_TID;
 static uint32_t                s_nav_task_active_tid = NULL_TID;
 static struct future           s_tick_task_future;
 
+/* Per-tick nav stats published by the nav fiber, read by the main thread at the
+ * join (valid once s_tick_task_future is ready).
+ */
+static struct{
+    uint32_t wall_us;
+    uint32_t serial_us;
+    uint32_t total_us; 
+}s_last_nav_tick_stats;
+
 static const char *s_state_str[] = {
     [STATE_MOVING]              = STR(STATE_MOVING),
     [STATE_MOVING_IN_FORMATION] = STR(STATE_MOVING_IN_FORMATION),
@@ -3479,6 +3488,7 @@ static void move_update_work(int begin_idx, int end_idx)
 
 static struct result move_velocity_task(void *arg)
 {
+    uint64_t t0 = SDL_GetPerformanceCounter();
     struct move_task_arg *move_arg = arg;
     size_t ncomputed = 0;
 
@@ -3490,11 +3500,13 @@ static struct result move_velocity_task(void *arg)
         if(ncomputed % 16 == 0)
             Task_Yield();
     }
+    Perf_NavParallelAddSince(t0);
     return NULL_RESULT;
 }
 
 static struct result move_update_task(void *arg)
 {
+    uint64_t t0 = SDL_GetPerformanceCounter();
     struct move_task_arg *move_arg = arg;
     size_t ncomputed = 0;
 
@@ -3506,6 +3518,7 @@ static struct result move_update_task(void *arg)
         if(ncomputed % 16 == 0)
             Task_Yield();
     }
+    Perf_NavParallelAddSince(t0);
     return NULL_RESULT;
 }
 
@@ -3994,10 +4007,10 @@ static enum move_work_status nav_tick_finish_work(void)
     PERF_POP();
     s_tick_task_tid = NULL_TID;
 
-    /* s_move_work.hz still holds the just-completed task's rate at this point. */
-    uint32_t dur_us = (uint32_t)s_tick_task_future.res.val.as_int;
+    /* s_move_work.{hz,nwork} still hold the just-completed task's values here. */
     uint32_t budget_us = 1000000u / hz_count(s_move_work.hz);
-    Perf_RecordNavTick(dur_us, budget_us);
+    Perf_RecordNavTick(s_last_nav_tick_stats.wall_us, s_last_nav_tick_stats.serial_us,
+        s_last_nav_tick_stats.total_us, (uint32_t)s_move_work.nwork, budget_us);
 
     return WORK_COMPLETE;
 }
@@ -4263,11 +4276,18 @@ static struct result navigation_tick_task(void *arg)
 {
     s_nav_task_active_tid = Sched_ActiveTID();
     uint64_t nav_start = SDL_GetPerformanceCounter();
+    Perf_NavParallelReset();
 
     N_ApplyDeferredInvalidations();
     compute_los_state();
+    uint64_t serial_ticks = SDL_GetPerformanceCounter() - nav_start;
+
     compute_async_fields();
+
+    uint64_t dv_start = SDL_GetPerformanceCounter();
     compute_desired_velocity();
+    serial_ticks += SDL_GetPerformanceCounter() - dv_start;
+
     fork_join_velocity_computations();
 
     if(s_move_work.type == WORK_TYPE_GPU) {
@@ -4285,8 +4305,12 @@ static struct result navigation_tick_task(void *arg)
     s_nav_task_active_tid = NULL_TID;
 
     uint64_t freq = SDL_GetPerformanceFrequency();
-    uint32_t dur_us = freq ? (uint32_t)((SDL_GetPerformanceCounter() - nav_start) * 1000000ull / freq) : 0;
-    return (struct result){ .type = RESULT_INT, .val.as_int = dur_us };
+    uint32_t wall_us   = freq ? (uint32_t)((SDL_GetPerformanceCounter() - nav_start) * 1000000ull / freq) : 0;
+    uint32_t serial_us = freq ? (uint32_t)(serial_ticks * 1000000ull / freq) : 0;
+    s_last_nav_tick_stats.wall_us   = wall_us;
+    s_last_nav_tick_stats.serial_us = serial_us;
+    s_last_nav_tick_stats.total_us  = serial_us + Perf_NavParallelGet();
+    return NULL_RESULT;
 }
 
 /* Stopped held units aren't in the per-tick work; pivot them toward their combat facing here. */

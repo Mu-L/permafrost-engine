@@ -3511,12 +3511,7 @@ static struct result move_update_task(void *arg)
 
 static void move_complete_cpu_work(void)
 {
-    for(int i = 0; i < s_move_work.ntasks; i++) {
-        while(!Sched_FutureIsReady(&s_move_work.futures[i])) {
-            Sched_RunSync(s_move_work.tids[i]);
-            Sched_TryYield();
-        }
-    }
+    Sched_AwaitAll(s_move_work.tids, s_move_work.futures, s_move_work.ntasks);
     s_move_work.ntasks = 0;
 }
 
@@ -4199,8 +4194,6 @@ static void fork_join_state_updates(void)
     PERF_PUSH("move::submit state updates");
     move_submit_cpu_work(move_update_task);
     PERF_POP();
-
-    Sched_TryYield();
 
     PERF_PUSH("move::complete state updates");
     move_complete_cpu_work();

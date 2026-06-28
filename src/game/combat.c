@@ -2051,11 +2051,7 @@ static struct result combat_task(void *arg)
 
 static void combat_complete_work(void)
 {
-    for(int i = 0; i < s_combat_work.ntasks; i++) {
-        while(!Sched_FutureIsReady(&s_combat_work.futures[i])) {
-            Sched_RunSync(s_combat_work.tids[i]);
-        }
-    }
+    Sched_AwaitAll(s_combat_work.tids, s_combat_work.futures, s_combat_work.ntasks);
 }
 
 static khash_t(aabb) *combat_copy_aabbs(void)

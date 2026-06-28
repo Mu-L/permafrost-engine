@@ -2061,12 +2061,7 @@ static struct result field_task(void *arg)
 
 static void field_join_work(void)
 {
-    for(int i = 0; i < s_field_work.ntasks; i++) {
-        while(!Sched_FutureIsReady(&s_field_work.futures[i])) {
-            Sched_RunSync(s_field_work.tids[i]);
-            Sched_TryYield();
-        }
-    }
+    Sched_AwaitAll(s_field_work.tids, s_field_work.futures, s_field_work.ntasks);
 }
 
 static vec2_t tile_center_location(struct nav_private *priv, vec3_t map_pos, struct tile_desc td)

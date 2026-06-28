@@ -1563,6 +1563,45 @@ bool Sched_RunSync(uint32_t tid)
     return do_run_sync(tid, true);
 }
 
+/* Fair, work-conserving join. Yields first so the worker pool claims the freshly
+ * submitted tasks, then helps by taking one not-yet-claimed task and running it
+ * to completion before considering another, yielding between. A task a worker
+ * already owns makes Sched_RunSync return false: skip it rather than spin. 
+ */
+void Sched_AwaitAll(const uint32_t *tids, const struct future *futures, size_t n)
+{
+    if(n == 0)
+        return;
+
+    if(n == 1) {
+        while(!Sched_FutureIsReady(&futures[0]))
+            Sched_RunSync(tids[0]);
+        return;
+    }
+
+    Sched_TryYield();
+
+    bool pending;
+    do {
+        pending = false;
+        for(size_t i = 0; i < n; i++) {
+
+            if(Sched_FutureIsReady(&futures[i]))
+                continue;
+            pending = true;
+
+            bool helped = false;
+            while(!Sched_FutureIsReady(&futures[i]) && Sched_RunSync(tids[i]))
+                helped = true;
+
+            if(helped)
+                Sched_TryYield();
+        }
+        if(pending)
+            Sched_TryYield();
+    }while(pending);
+}
+
 void Sched_ClearState(void)
 {
     ASSERT_IN_MAIN_THREAD();

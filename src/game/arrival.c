@@ -936,7 +936,9 @@ bool G_Arrival_DesiredVelocity(const struct arrival_state *as, struct arrival_un
             *out_vel = toc;
             return true;
         }
-        *out_vel = M_NavDesiredPointSeekVelocity(nav_map, as->com_dest_id, pos, as->com);
+        *out_vel = M_NavDesiredVelocityForTargetCached(nav_map, (struct target){
+            .kind = TARGET_KIND_POINT_SEEK,
+            .point_seek = {.dest_id = as->com_dest_id, .dest_xz = as->com}}, pos);
         return true;
     }
     }

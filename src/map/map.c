@@ -784,29 +784,27 @@ void M_NavRenderNavigationLocalIslandIDs(const struct map *map, const struct cam
     }}
 }
 
-vec2_t M_NavDesiredPointSeekVelocity(const struct map *map, dest_id_t id, vec2_t curr_pos, vec2_t xz_dest)
-{
-    return N_DesiredPointSeekVelocity(id, curr_pos, xz_dest, map->nav_private, map->pos);
-}
-
-vec2_t M_NavDesiredEnemySeekVelocity(const struct map *map, enum nav_layer layer, 
-                                     vec2_t curr_pos, int faction_id)
-{
-    return N_DesiredEnemySeekVelocity(curr_pos, map->nav_private, layer, map->pos, faction_id);
-}
-
-vec2_t M_NavDesiredSurroundVelocity(const struct map *map, enum nav_layer layer, 
-                                    vec2_t curr_pos, const uint32_t uid, int faction_id)
-{
-    return N_DesiredSurroundVelocity(curr_pos, map->nav_private, layer, map->pos, uid, faction_id);
-}
-
 bool M_NavDesiredGroupArrivalVelocity(const struct map *map, enum nav_layer layer, vec2_t curr_pos,
                                       vec2_t centre_pos, uint16_t radius,
                                       vec2_t *out_vel, bool *out_at_slot)
 {
     return N_DesiredGroupArrivalVelocity(curr_pos, map->nav_private, layer, map->pos,
         centre_pos, radius, out_vel, out_at_slot);
+}
+
+bool M_NavRequiresPathRequest(const struct map *map, struct target target, vec2_t xz)
+{
+    return N_RequiresPathRequest(map->nav_private, map->pos, target, xz);
+}
+
+vec2_t M_NavDesiredVelocityForTargetCached(const struct map *map, struct target target, vec2_t xz)
+{
+    return N_DesiredVelocityForTargetCached(map->nav_private, map->pos, target, xz);
+}
+
+void M_NavServicePathRequest(const struct map *map, struct target target, vec2_t xz)
+{
+    N_ServicePathRequest(map->nav_private, map->pos, target, xz);
 }
 
 bool M_NavHasDestLOS(const struct map *map, dest_id_t id, vec2_t curr_pos, vec2_t xz_dest)

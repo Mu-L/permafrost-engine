@@ -134,6 +134,15 @@ void                     N_FC_PutDestFFMapping(struct fieldcache_ctx *ctx,
                                                struct coord chunk_coord, 
                                                ff_id_t ffid);
 
+/* Non-mutating reads (no LRU recency bump, no stats, no nav-task assert). Safe to call
+ * concurrently from worker fibers so long as no thread mutates the cache.
+ */
+const struct LOS_field  *N_FC_PeekLOSField(struct fieldcache_ctx *ctx, dest_id_t id,
+                                           struct coord chunk_coord);
+const struct flow_field *N_FC_PeekFlowField(struct fieldcache_ctx *ctx, ff_id_t ffid);
+bool                     N_FC_PeekDestFFMapping(struct fieldcache_ctx *ctx, dest_id_t id,
+                                               struct coord chunk_coord, ff_id_t *out_ff);
+
 /*###########################################################################*/
 /* GRID PATH CACHING                                                         */
 /*###########################################################################*/

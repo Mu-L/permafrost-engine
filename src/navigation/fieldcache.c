@@ -426,6 +426,27 @@ bool N_FC_GetDestFFMapping(struct fieldcache_ctx *ctx, dest_id_t id,
     return ret;
 }
 
+const struct LOS_field *N_FC_PeekLOSField(struct fieldcache_ctx *ctx, dest_id_t id,
+                                          struct coord chunk_coord)
+{
+    return lru_los_peek(&ctx->los_cache, key_for_dest_and_chunk(id, chunk_coord));
+}
+
+const struct flow_field *N_FC_PeekFlowField(struct fieldcache_ctx *ctx, ff_id_t ffid)
+{
+    return lru_flow_peek(&ctx->flow_cache, ffid);
+}
+
+bool N_FC_PeekDestFFMapping(struct fieldcache_ctx *ctx, dest_id_t id,
+                            struct coord chunk_coord, ff_id_t *out_ff)
+{
+    const ff_id_t *p = lru_ffid_peek(&ctx->ffid_cache, key_for_dest_and_chunk(id, chunk_coord));
+    if(!p)
+        return false;
+    *out_ff = *p;
+    return true;
+}
+
 void N_FC_PutDestFFMapping(struct fieldcache_ctx *ctx, dest_id_t dest_id, 
                            struct coord chunk_coord, ff_id_t ffid)
 {

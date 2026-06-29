@@ -393,33 +393,19 @@ void   M_NavRenderVisiblePathFlowField(const struct map *map, const struct camer
 void   M_RenderChunkVisibility(const struct map *map, const struct camera *cam, 
                                int faction_id);
 
-/* ------------------------------------------------------------------------
- * Returns the desired velocity vector for moving with the flow field 
- * to the specified destination.
- * ------------------------------------------------------------------------
- */
-vec2_t M_NavDesiredPointSeekVelocity(const struct map *map, dest_id_t id, 
-                                     vec2_t curr_pos, vec2_t xz_dest);
-
-/* ------------------------------------------------------------------------
- * Returns the desired velocity vector for moving with the flow field 
- * for approaching enemies of a particular faction.
- * ------------------------------------------------------------------------
- */
-vec2_t M_NavDesiredEnemySeekVelocity(const struct map *map, enum nav_layer layer, 
-                                     vec2_t curr_pos, int faction_id);
-
-/* ------------------------------------------------------------------------
- * Returns the desired velocity vector for getting as close as possible
- * to a specific entity. This only works when we are within a chunk-sized
- * box centered at the target entity position. Until then, use a point path.
- * ------------------------------------------------------------------------
- */
-vec2_t M_NavDesiredSurroundVelocity(const struct map *map, enum nav_layer layer, 
-                                    vec2_t curr_pos, const uint32_t uid, int faction_id);
 bool   M_NavDesiredGroupArrivalVelocity(const struct map *map, enum nav_layer layer, vec2_t curr_pos,
                                         vec2_t centre_pos, uint16_t radius,
                                         vec2_t *out_vel, bool *out_at_slot);
+
+/* ------------------------------------------------------------------------
+ * Target-based navigation queries: read-only test of whether the field a
+ * unit needs is cached, a read-only cached read of the desired velocity, and
+ * a (cache-mutating, nav-task-only) build of the needed field.
+ * ------------------------------------------------------------------------
+ */
+bool   M_NavRequiresPathRequest(const struct map *map, struct target target, vec2_t xz);
+vec2_t M_NavDesiredVelocityForTargetCached(const struct map *map, struct target target, vec2_t xz);
+void   M_NavServicePathRequest(const struct map *map, struct target target, vec2_t xz);
 
 /* ------------------------------------------------------------------------
  * Returns true if the specified coordinate is in direct line of sight of 

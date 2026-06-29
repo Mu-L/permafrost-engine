@@ -135,6 +135,24 @@ struct nav_unit_query_ctx{
 
 #define DEST_ID_INVALID (~((uint32_t)0))
 
+/* A high-level description of what a unit is navigating towards. Used to key
+ * the path-request and cached desired-velocity queries.
+ */
+enum target_kind{
+    TARGET_KIND_POINT_SEEK,   /* 'dest_id' encodes the layer and faction */
+    TARGET_KIND_ENEMY_SEEK,
+    TARGET_KIND_SURROUND,
+};
+
+struct target{
+    enum target_kind kind;
+    union{
+        struct{ dest_id_t dest_id; vec2_t dest_xz; }                  point_seek;
+        struct{ enum nav_layer layer; int faction_id; }              enemy_seek;
+        struct{ enum nav_layer layer; int faction_id; uint32_t uid; } surround;
+    };
+};
+
 /*###########################################################################*/
 /* NAV GENERAL                                                               */
 /*###########################################################################*/
@@ -370,33 +388,6 @@ bool      N_RequestPathAttacking(void *nav_private, vec2_t xz_src,
                                  dest_id_t *out_dest_id);
 
 /* ------------------------------------------------------------------------
- * Returns the desired velocity for an entity at 'curr_pos' for it to flow
- * towards a particular destination.
- * ------------------------------------------------------------------------
- */
-vec2_t    N_DesiredPointSeekVelocity(dest_id_t id, vec2_t curr_pos, vec2_t xz_dest, 
-                                     void *nav_private, vec3_t map_pos);
-
-/* ------------------------------------------------------------------------
- * Returns the desired velocity for an entity at 'curr_pos' for it to flow
- * towards the closest enemy units.
- * ------------------------------------------------------------------------
- */
-vec2_t    N_DesiredEnemySeekVelocity(vec2_t curr_pos, void *nav_private, 
-                                     enum nav_layer layer, vec3_t map_pos, 
-                                     int faction_id);
-
-/* ------------------------------------------------------------------------
- * Returns the desired velocity for an entity at 'curr_pos' for it to flow
- * towards the the specified entity. The flow field will be NULL if this is
- * outside a chunk-sized box centered at the enemy position. This is for
- * fine-tuned movement when we are already close to the target.
- * ------------------------------------------------------------------------
- */
-vec2_t N_DesiredSurroundVelocity(vec2_t curr_pos, void *nav_private, enum nav_layer layer, 
-                                 vec3_t map_pos, const uint32_t ent, int faction_id);
-
-/* ------------------------------------------------------------------------
  * Read a flock's shared arrival (TARGET_ZONE) field at 'curr_pos'. Returns
  * false if the field isn't cached for the position's chunk (caller should
  * fall back to the goal dest-field). On success, '*out_vel' is the flow
@@ -407,6 +398,29 @@ vec2_t N_DesiredSurroundVelocity(vec2_t curr_pos, void *nav_private, enum nav_la
 bool   N_DesiredGroupArrivalVelocity(vec2_t curr_pos, void *nav_private, enum nav_layer layer,
                                      vec3_t map_pos, vec2_t centre_pos, uint16_t radius,
                                      vec2_t *out_vel, bool *out_at_slot);
+
+/* ------------------------------------------------------------------------
+ * Read-only test of whether the field 'target' needs (for the chunk holding
+ * 'xz') is absent from the cache and must be built. Performs no cache
+ * mutation and no building.
+ * ------------------------------------------------------------------------
+ */
+bool   N_RequiresPathRequest(void *nav_private, vec3_t map_pos, struct target target, vec2_t xz);
+
+/* ------------------------------------------------------------------------
+ * Returns the desired velocity for 'target' at 'xz', reading only the cached
+ * field (guaranteed read-only). The field is expected to be present (warmed by
+ * a prior path request); returns a zero vector if it is not.
+ * ------------------------------------------------------------------------
+ */
+vec2_t N_DesiredVelocityForTargetCached(void *nav_private, vec3_t map_pos, struct target target, vec2_t xz);
+
+/* ------------------------------------------------------------------------
+ * Build (and cache) the field that 'target' needs for the chunk holding 'xz',
+ * including blocked-tile repair. Mutates the cache; must run on the nav task.
+ * ------------------------------------------------------------------------
+ */
+void   N_ServicePathRequest(void *nav_private, vec3_t map_pos, struct target target, vec2_t xz);
 
 /* ------------------------------------------------------------------------
  * Returns true if the particular entity is in direct line of sight of the 

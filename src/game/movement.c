@@ -1474,56 +1474,57 @@ static void request_async_field(uint32_t uid)
     }
 }
 
+static struct target build_target(uint32_t uid)
+{
+    const struct movestate *ms = movestate_get(uid);
+    float radius = G_GetSelectionRadiusFrom(s_move_work.gamestate.sel_radiuses, uid);
+    uint32_t flags = G_FlagsGetFrom(s_move_work.gamestate.flags, uid);
+    int layer = Entity_NavLayerWithRadius(flags, radius);
+    int faction_id = G_GetFactionIDFrom(s_move_work.gamestate.faction_ids, uid);
+
+    if(ms->state == STATE_SEEK_ENEMIES) {
+        return (struct target){.kind = TARGET_KIND_ENEMY_SEEK,
+                               .enemy_seek = {.layer = layer, .faction_id = faction_id}};
+    }
+    if(ms->state == STATE_SURROUND_ENTITY
+    && entity_exists(ms->surround_target_uid) && ms->using_surround_field) {
+        return (struct target){.kind = TARGET_KIND_SURROUND,
+                               .surround = {.layer = layer, .faction_id = faction_id,
+                                            .uid = ms->surround_target_uid}};
+    }
+    struct flock *fl = flock_for_ent(uid);
+    assert(fl);
+    return (struct target){.kind = TARGET_KIND_POINT_SEEK,
+                           .point_seek = {.dest_id = fl->dest_id, .dest_xz = fl->target_xz}};
+}
+
 static vec2_t ent_desired_velocity(uint32_t uid, vec2_t cell_arrival_vdes, bool has_dest_los)
 {
     const struct movestate *ms = movestate_get(uid);
     vec2_t pos_xz = G_Pos_GetXZFrom(s_move_work.gamestate.positions, uid);
-    struct flock *fl = flock_for_ent(uid);
+    const struct map *map = s_move_work.gamestate.map;
 
     switch(ms->state) {
     case STATE_TURNING:
         return (vec2_t){0.0f, 0.0f};
 
-    case STATE_SEEK_ENEMIES:  {
-        float radius = G_GetSelectionRadiusFrom(s_move_work.gamestate.sel_radiuses, uid);
-        uint32_t flags = G_FlagsGetFrom(s_move_work.gamestate.flags, uid);
-        int layer = Entity_NavLayerWithRadius(flags, radius);
-        int faction_id = G_GetFactionIDFrom(s_move_work.gamestate.faction_ids, uid);
-        return M_NavDesiredEnemySeekVelocity(s_move_work.gamestate.map, layer, pos_xz, faction_id);
-    }
-    case STATE_SURROUND_ENTITY: {
-
-        if(!entity_exists(ms->surround_target_uid)) {
-            return M_NavDesiredPointSeekVelocity(s_move_work.gamestate.map, fl->dest_id, 
-                pos_xz, fl->target_xz);
-        }
-
-        if(ms->using_surround_field) {
-            float radius = G_GetSelectionRadiusFrom(s_move_work.gamestate.sel_radiuses, uid);
-            uint32_t flags = G_FlagsGetFrom(s_move_work.gamestate.flags, uid);
-            int layer = Entity_NavLayerWithRadius(flags, radius);
-            int faction_id = G_GetFactionIDFrom(s_move_work.gamestate.faction_ids, uid);
-            return M_NavDesiredSurroundVelocity(s_move_work.gamestate.map, layer, pos_xz, 
-                ms->surround_target_uid, faction_id);
-        }else{
-            return M_NavDesiredPointSeekVelocity(s_move_work.gamestate.map, fl->dest_id, 
-                pos_xz, fl->target_xz);
-        }
-        break;
-    }
-    case STATE_ARRIVING_TO_CELL: {
+    case STATE_ARRIVING_TO_CELL:
         return cell_arrival_vdes;
-    }
+
+    case STATE_SEEK_ENEMIES:
+    case STATE_SURROUND_ENTITY:
+        return M_NavDesiredVelocityForTargetCached(map, build_target(uid), pos_xz);
+
     default: {
+        struct flock *fl = flock_for_ent(uid);
         assert(fl);
         struct movestate *mms = movestate_get(uid);
         struct arrival_state *as = flock_arrival_for_ent(fl, uid);
         vec2_t arrival_vel;
         if(as && G_Arrival_DesiredVelocity(as, &mms->arrival, s_map,
-            s_move_work.gamestate.map, pos_xz, mms->velocity, has_dest_los, &arrival_vel))
+            map, pos_xz, mms->velocity, has_dest_los, &arrival_vel))
             return arrival_vel;
-        return M_NavDesiredPointSeekVelocity(s_move_work.gamestate.map, fl->dest_id,
-            pos_xz, fl->target_xz);
+        return M_NavDesiredVelocityForTargetCached(map, build_target(uid), pos_xz);
     }
     }
 }
@@ -3486,6 +3487,27 @@ static void move_update_work(int begin_idx, int end_idx)
     }
 }
 
+static struct result move_dv_task(void *arg)
+{
+    uint64_t t0 = SDL_GetPerformanceCounter();
+    struct move_task_arg *move_arg = arg;
+    size_t ncomputed = 0;
+
+    for(int i = move_arg->begin_idx; i <= move_arg->end_idx; i++) {
+
+        struct move_work_in *in = &s_move_work.in[i];
+        in->ent_des_v = ent_desired_velocity(in->ent_uid, in->cell_arrival_vdes,
+            in->has_dest_los);
+        s_move_work.out[i].ent_des_v = in->ent_des_v;
+        ncomputed++;
+
+        if(ncomputed % 16 == 0)
+            Task_Yield();
+    }
+    Perf_NavParallelAddSince(t0);
+    return NULL_RESULT;
+}
+
 static struct result move_velocity_task(void *arg)
 {
     uint64_t t0 = SDL_GetPerformanceCounter();
@@ -4160,14 +4182,15 @@ static void compute_los_state(void)
     PERF_RETURN_VOID();
 }
 
-static void compute_async_fields(void)
+static void compute_path_requests(void)
 {
-    /* The field computations can read various navigation state
-     * from different threads. This is okay so long as nothing
-     * concurrently mutates it.
+    PERF_ENTER();
+
+    /* Parallel pre-build of the per-entity enemy/surround fields and the per-flock
+     * arrival zone fields. The field computations read navigation state from
+     * multiple threads, which is safe so long as nothing mutates it concurrently.
      */
     N_PrepareAsyncWork();
-
     for(int i = 0; i < s_move_work.nwork; i++) {
         struct move_work_in *in = &s_move_work.in[i];
         request_async_field(in->ent_uid);
@@ -4175,22 +4198,50 @@ static void compute_async_fields(void)
     }
     request_flock_arrival_fields();
     N_AwaitAsyncFields();
-}
 
-static void compute_desired_velocity(void)
-{
+    /* Serial pre-build of point-seek paths and blocked-tile repairs, which mutate
+     * the shared cache and so cannot run in the parallel desired-velocity phase.
+     * Yield periodically so the scheduler can still meet its frame budget.
+     */
+    const struct map *map = s_move_work.gamestate.map;
+    uint64_t last_yield = SDL_GetPerformanceCounter();
+    const uint64_t yield_ticks = SDL_GetPerformanceFrequency() / 500; /* ~2ms */
     for(int i = 0; i < s_move_work.nwork; i++) {
 
-        struct move_work_in *in = &s_move_work.in[i];
-        struct move_work_out *out = &s_move_work.out[i];
+        uint32_t uid = s_move_work.in[i].ent_uid;
+        const struct movestate *ms = movestate_get(uid);
+        if(!ms || ms->state == STATE_TURNING || ms->state == STATE_ARRIVING_TO_CELL)
+            continue;
 
-        PERF_PUSH("desired velocity");
-        in->ent_des_v = ent_desired_velocity(in->ent_uid, in->cell_arrival_vdes, in->has_dest_los);
-        out->ent_des_v = in->ent_des_v;
-        PERF_POP();
+        vec2_t pos = G_Pos_GetXZFrom(s_move_work.gamestate.positions, uid);
+        struct target t = build_target(uid);
+        if(M_NavRequiresPathRequest(map, t, pos))
+            M_NavServicePathRequest(map, t, pos);
 
-		Sched_TryYield();
+        /* Arrival units may fall back to the group centre-of-mass point-seek field. */
+        struct flock *fl = flock_for_ent(uid);
+        struct arrival_state *as = fl ? flock_arrival_for_ent(fl, uid) : NULL;
+        if(as && as->phase == ARRIVAL_PHASE_FILLING) {
+            struct target tc = {.kind = TARGET_KIND_POINT_SEEK,
+                                .point_seek = {.dest_id = as->com_dest_id, .dest_xz = as->com}};
+            if(M_NavRequiresPathRequest(map, tc, pos))
+                M_NavServicePathRequest(map, tc, pos);
+        }
+
+        if(SDL_GetPerformanceCounter() - last_yield > yield_ticks) {
+            Task_Yield();
+            last_yield = SDL_GetPerformanceCounter();
+        }
     }
+    PERF_RETURN_VOID();
+}
+
+static void fork_join_desired_velocity(void)
+{
+    PERF_ENTER();
+    move_submit_cpu_work(move_dv_task);
+    move_complete_cpu_work();
+    PERF_RETURN_VOID();
 }
 
 static void fork_join_velocity_computations(void)
@@ -4276,18 +4327,20 @@ static struct result navigation_tick_task(void *arg)
 {
     s_nav_task_active_tid = Sched_ActiveTID();
     uint64_t nav_start = SDL_GetPerformanceCounter();
+
     Perf_NavParallelReset();
-
     N_ApplyDeferredInvalidations();
+
     compute_los_state();
+
     uint64_t serial_ticks = SDL_GetPerformanceCounter() - nav_start;
+    uint64_t cpr_start = SDL_GetPerformanceCounter();
 
-    compute_async_fields();
+    compute_path_requests();
 
-    uint64_t dv_start = SDL_GetPerformanceCounter();
-    compute_desired_velocity();
-    serial_ticks += SDL_GetPerformanceCounter() - dv_start;
+    serial_ticks += SDL_GetPerformanceCounter() - cpr_start;
 
+    fork_join_desired_velocity();
     fork_join_velocity_computations();
 
     if(s_move_work.type == WORK_TYPE_GPU) {

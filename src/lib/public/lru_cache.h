@@ -121,6 +121,8 @@
     scope  bool  lru_##name##_get      (lru(name) *lru, uint64_t key, type *out);               \
     /* Returned pointer is invalidated when new entries are added; it should not be cached  */  \
     scope  const type *lru_##name##_at (lru(name) *lru, uint64_t key);                          \
+    /* Like _at but does not update LRU recency; safe for concurrent readers. */                \
+    scope  const type *lru_##name##_peek (lru(name) *lru, uint64_t key);                         \
     scope  bool  lru_##name##_contains (lru(name) *lru, uint64_t key);                          \
     scope  void  lru_##name##_put      (lru(name) *lru, uint64_t key, const type *in);          \
     scope  bool  lru_##name##_remove   (lru(name) *lru, uint64_t key);                          \
@@ -237,6 +239,16 @@
                                                                                                 \
         _lru_##name##_reference(lru, ref);                                                      \
         return &mpn->entry;                                                                     \
+    }                                                                                           \
+                                                                                                \
+    scope const type *lru_##name##_peek(lru(name) *lru, uint64_t key)                           \
+    {                                                                                           \
+        khiter_t k;                                                                             \
+        if((k = kh_get(name, lru->key_node_table, key)) == kh_end(lru->key_node_table))         \
+            return NULL;                                                                        \
+                                                                                                \
+        mp_ref_t ref = kh_val(lru->key_node_table, k);                                          \
+        return &mp_##name##_entry(&lru->node_pool, ref)->entry;                                 \
     }                                                                                           \
                                                                                                 \
     scope bool lru_##name##_contains(lru(name) *lru, uint64_t key)                              \

@@ -1997,6 +1997,7 @@ static bool n_request_path(void *nav_private, vec2_t xz_src, vec2_t xz_dest, int
              */
             const struct flow_field *exist_ff  = N_FC_FlowFieldAt(priv->fieldcache, exist_id);
             memcpy(&ff, exist_ff, sizeof(struct flow_field));
+            ff.patched = 0;
 
             N_FlowFieldUpdate(chunk_coord, priv, faction_id, layer, target, priv->unit_query_ctx, &ff);
             /* We set the updated flow field for the new (least recently used) key. Since in 
@@ -3480,26 +3481,30 @@ bool N_RequiresPathRequest(void *nav_private, vec3_t map_pos, struct target targ
     assert(result);
     struct coord chunk = (struct coord){tile.chunk_r, tile.chunk_c};
 
+    enum nav_layer layer;
     ff_id_t ffid;
     switch(target.kind) {
     case TARGET_KIND_POINT_SEEK:
+        layer = N_DestLayer(target.point_seek.dest_id);
         if(!N_FC_PeekDestFFMapping(priv->fieldcache, target.point_seek.dest_id, chunk, &ffid))
             return true;
         break;
     case TARGET_KIND_ENEMY_SEEK:
+        layer = target.enemy_seek.layer;
         ffid = N_FlowFieldID(chunk, (struct field_target){
             .type = TARGET_ENEMIES,
             .enemies.faction_id = target.enemy_seek.faction_id,
             .enemies.map_pos = map_pos,
             .enemies.chunk = chunk
-        }, target.enemy_seek.layer);
+        }, layer);
         break;
     case TARGET_KIND_SURROUND:
+        layer = target.surround.layer;
         ffid = N_FlowFieldID(chunk, (struct field_target){
             .type = TARGET_ENTITY,
             .ent.target = target.surround.uid,
             .ent.map_pos = map_pos
-        }, target.surround.layer);
+        }, layer);
         break;
     default:
         assert(0);
@@ -3507,8 +3512,19 @@ bool N_RequiresPathRequest(void *nav_private, vec3_t map_pos, struct target targ
     }
 
     const struct flow_field *ff = N_FC_PeekFlowField(priv->fieldcache, ffid);
-    if(!ff || ff->field[tile.tile_r][tile.tile_c].dir_idx == FD_NONE)
+    if(!ff)
         return true;
+    if(ff->field[tile.tile_r][tile.tile_c].dir_idx == FD_NONE) {
+        /* No flow here: an impassable tile (ISLAND_NONE) needs no build, since the
+         * desired-velocity phase steers off it read-only; a passable tile cut off
+         * from the target needs the field patched once.
+         */
+        const struct nav_chunk *nchunk =
+            &priv->chunks[layer][IDX(tile.chunk_r, priv->width, tile.chunk_c)];
+        if(nchunk->local_islands[tile.tile_r][tile.tile_c] == ISLAND_NONE)
+            return false;
+        return !ff->patched;
+    }
     return false;
 }
 
@@ -3523,42 +3539,51 @@ vec2_t N_DesiredVelocityForTargetCached(void *nav_private, vec3_t map_pos, struc
     assert(result);
     struct coord chunk = (struct coord){tile.chunk_r, tile.chunk_c};
 
+    enum nav_layer layer;
+    ff_id_t ffid;
     if(target.kind == TARGET_KIND_POINT_SEEK) {
-
-        /* The field may be legitimately absent: when a blocker change leaves the
-         * destination unreachable, n_request_path fails and compute_path_requests
-         * leaves it unbuilt. Treat that as a zero desired velocity, matching the
-         * pre-refactor behaviour.
+        layer = N_DestLayer(target.point_seek.dest_id);
+        /* The field can be legitimately absent: an unreachable destination leaves
+         * n_request_path unable to build it. Treat that as zero velocity.
          */
-        ff_id_t ffid;
         if(!N_FC_PeekDestFFMapping(priv->fieldcache, target.point_seek.dest_id, chunk, &ffid))
             return (vec2_t){0.0f, 0.0f};
-        const struct flow_field *ff = N_FC_PeekFlowField(priv->fieldcache, ffid);
-        if(!ff)
-            return (vec2_t){0.0f, 0.0f};
-        return n_interpolated_flow_dir(priv, target.point_seek.dest_id, res, map_pos, xz, ff, tile, true);
-    }
-
-    ff_id_t ffid;
-    if(target.kind == TARGET_KIND_ENEMY_SEEK) {
+    }else if(target.kind == TARGET_KIND_ENEMY_SEEK) {
+        layer = target.enemy_seek.layer;
         ffid = N_FlowFieldID(chunk, (struct field_target){
             .type = TARGET_ENEMIES,
             .enemies.faction_id = target.enemy_seek.faction_id,
             .enemies.map_pos = map_pos,
             .enemies.chunk = chunk
-        }, target.enemy_seek.layer);
+        }, layer);
     }else{
         assert(target.kind == TARGET_KIND_SURROUND);
+        layer = target.surround.layer;
         ffid = N_FlowFieldID(chunk, (struct field_target){
             .type = TARGET_ENTITY,
             .ent.target = target.surround.uid,
             .ent.map_pos = map_pos
-        }, target.surround.layer);
+        }, layer);
     }
 
     const struct flow_field *ff = N_FC_PeekFlowField(priv->fieldcache, ffid);
     if(!ff)
         return (vec2_t){0.0f, 0.0f};
+
+    if(ff->field[tile.tile_r][tile.tile_c].dir_idx == FD_NONE) {
+        /* No flow here: an impassable tile (ISLAND_NONE) is escaped read-only
+         * toward the nearest flowing tile; a passable tile was patched in the build
+         * phase, so one still empty here is the destination and stops the unit.
+         */
+        const struct nav_chunk *nchunk =
+            &priv->chunks[layer][IDX(tile.chunk_r, priv->width, tile.chunk_c)];
+        if(nchunk->local_islands[tile.tile_r][tile.tile_c] == ISLAND_NONE)
+            return N_FlowDir(N_FlowFieldEscapeDir((struct coord){tile.tile_r, tile.tile_c}, ff));
+        return (vec2_t){0.0f, 0.0f};
+    }
+
+    if(target.kind == TARGET_KIND_POINT_SEEK)
+        return n_interpolated_flow_dir(priv, target.point_seek.dest_id, res, map_pos, xz, ff, tile, true);
     return N_FlowDir(ff->field[tile.tile_r][tile.tile_c].dir_idx);
 }
 
@@ -3629,26 +3654,23 @@ void N_ServicePathRequest(void *nav_private, vec3_t map_pos, struct target targe
         }
     }
 
-    /* The entity is on a blocked tile (FD_NONE). Repair the field toward the
-     * nearest pathable tile, or toward the nearest reachable tile if the whole
-     * local island is cut off from the target.
+    /* The first unit to reach a passable tile cut off from the target patches the
+     * whole field at once: every blocked tile is filled toward the nearest flowing
+     * tile, so the rest read it free. Impassable tiles (ISLAND_NONE) are steered
+     * off read-only in the desired-velocity phase, not patched here.
      */
     const struct flow_field *ff = N_FC_FlowFieldAt(priv->fieldcache, ffid);
-    if(!ff || ff->field[tile.tile_r][tile.tile_c].dir_idx != FD_NONE)
+    if(!ff || ff->patched || ff->field[tile.tile_r][tile.tile_c].dir_idx != FD_NONE)
         return;
 
     const struct nav_chunk *nchunk =
         &priv->chunks[layer][IDX(tile.chunk_r, priv->width, tile.chunk_c)];
-    uint16_t local_iid = nchunk->local_islands[tile.tile_r][tile.tile_c];
+    if(nchunk->local_islands[tile.tile_r][tile.tile_c] == ISLAND_NONE)
+        return;
 
-    struct flow_field exist_ff = *ff;
-    if(local_iid == ISLAND_NONE) {
-        N_FlowFieldUpdateToNearestPathable(priv, layer, chunk,
-            (struct coord){tile.tile_r, tile.tile_c}, faction_id, priv->unit_query_ctx, &exist_ff);
-    }else{
-        N_FlowFieldUpdateIslandToNearest(local_iid, priv, layer, faction_id, priv->unit_query_ctx, &exist_ff);
-    }
-    N_FC_PutFlowField(priv->fieldcache, ffid, &exist_ff);
+    struct flow_field patched = *ff;
+    N_FlowFieldPatchBlocked(&patched);
+    N_FC_PutFlowField(priv->fieldcache, ffid, &patched);
 }
 
 bool N_DesiredGroupArrivalVelocity(vec2_t curr_pos, void *nav_private, enum nav_layer layer,

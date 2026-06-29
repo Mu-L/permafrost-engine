@@ -2025,6 +2025,7 @@ void N_FlowFieldInit(struct coord chunk_coord, struct flow_field *out)
         out->field[r][c].dir_idx = FD_NONE;
     }}
     out->chunk = chunk_coord;
+    out->patched = 0;
 }
 
 void N_FlowFieldUpdate(
@@ -2244,186 +2245,100 @@ void N_LOSFieldCreate(
     field_pad_wavefront(out_los);
 }
 
-void N_FlowFieldUpdateToNearestPathable(
-    const struct nav_private  *priv, 
-    enum nav_layer             layer,
-    struct coord               chunk,
-    struct coord               start, 
-    int                        faction_id, 
-    struct nav_unit_query_ctx *ctx,
-    struct flow_field         *inout_flow)
+enum flow_dir N_FlowFieldEscapeDir(struct coord start, const struct flow_field *ff)
 {
-    struct tile_desc init_frontier[FIELD_RES_R * FIELD_RES_C];
-    struct region chunk_region = (struct region){
-        .base = {chunk.r, chunk.c, 0, 0},
-        .r = FIELD_RES_R, 
-        .c = FIELD_RES_C
+    /* Bounded BFS outward from the blocked tile 'start' to the nearest tile that
+     * carries a valid flow direction, returning the first step toward it. Reads
+     * only 'ff' and mutates nothing, so it runs in the parallel desired-velocity
+     * phase, replacing the per-entity field copy and flood fill for the common
+     * blocked-tile case.
+     */
+    static const struct coord neighb[8] = {
+        {-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}
     };
-    struct tile_desc start_coord = (struct tile_desc){
-        chunk.r, chunk.c,
-        start.r, start.c
+    static const enum flow_dir neighb_dir[8] = {
+        FD_NW, FD_N, FD_NE, FD_W, FD_E, FD_SW, FD_S, FD_SE
     };
-    assert(chunk_region.base.chunk_r == start_coord.chunk_r);
-    assert(chunk_region.base.chunk_c == start_coord.chunk_c);
-    size_t ninit = field_passable_frontier(priv, layer, start_coord, 
-        chunk_region, init_frontier, ARR_SIZE(init_frontier), NULL, 0);
 
-    pq_coord_t frontier;
-    pq_coord_init(&frontier);
+    struct bfs_node{ struct coord tile; enum flow_dir first; };
+    bool visited[FIELD_RES_R][FIELD_RES_C] = {0};
+    struct bfs_node queue[FIELD_RES_R * FIELD_RES_C];
+    size_t head = 0, tail = 0;
 
-    float integration_field[FIELD_RES_R][FIELD_RES_C];
-    for(int r = 0; r < FIELD_RES_R; r++) {
-    for(int c = 0; c < FIELD_RES_C; c++) {
-        integration_field[r][c] = INFINITY;
-    }}
-
-    for(int i = 0; i < ninit; i++) {
-
-        struct coord curr = (struct coord){
-            init_frontier[i].tile_r,
-            init_frontier[i].tile_c
-        };
-        pq_coord_push(&frontier, 0.0f, curr); 
-        integration_field[curr.r][curr.c] = 0.0f;
+    visited[start.r][start.c] = true;
+    for(int i = 0; i < 8; i++) {
+        int nr = start.r + neighb[i].r, nc = start.c + neighb[i].c;
+        if(nr < 0 || nr >= FIELD_RES_R || nc < 0 || nc >= FIELD_RES_C)
+            continue;
+        visited[nr][nc] = true;
+        queue[tail++] = (struct bfs_node){ (struct coord){nr, nc}, neighb_dir[i] };
     }
 
-    struct nav_chunk *navchunk = &priv->chunks[layer][chunk.r * priv->width + chunk.c];
-    field_build_integration_nonpass(&frontier, navchunk, faction_id, ctx, integration_field);
-
-    for(int r = 0; r < FIELD_RES_R; r++) {
-    for(int c = 0; c < FIELD_RES_C; c++) {
-
-        if(integration_field[r][c] == INFINITY)
-            continue;
-        if(integration_field[r][c] == 0.0f)
-            continue;
-        inout_flow->field[r][c].dir_idx = field_flow_dir(FIELD_RES_R, FIELD_RES_C, 
-            (const float*)integration_field, (struct coord){r, c});
-    }}
-
-    pq_coord_destroy(&frontier);
+    while(head < tail) {
+        struct bfs_node node = queue[head++];
+        if(ff->field[node.tile.r][node.tile.c].dir_idx != FD_NONE)
+            return node.first;
+        for(int i = 0; i < 8; i++) {
+            int nr = node.tile.r + neighb[i].r, nc = node.tile.c + neighb[i].c;
+            if(nr < 0 || nr >= FIELD_RES_R || nc < 0 || nc >= FIELD_RES_C)
+                continue;
+            if(visited[nr][nc])
+                continue;
+            visited[nr][nc] = true;
+            queue[tail++] = (struct bfs_node){ (struct coord){nr, nc}, node.first };
+        }
+    }
+    return FD_NONE;
 }
 
-void N_FlowFieldUpdateIslandToNearest(
-    uint16_t                   local_iid, 
-    const struct nav_private  *priv,
-    enum nav_layer             layer, 
-    int                        faction_id, 
-    struct nav_unit_query_ctx *ctx,
-    struct flow_field         *inout_flow)
+void N_FlowFieldPatchBlocked(struct flow_field *ff)
 {
-    struct coord chunk_coord = inout_flow->chunk;
-    const struct nav_chunk *chunk = &priv->chunks[layer][IDX(chunk_coord.r, priv->width, chunk_coord.c)];
-
-    struct tile_desc base = (struct tile_desc){
-        .chunk_r = chunk_coord.r,
-        .chunk_c = chunk_coord.c,
-        .tile_r  = 0,
-        .tile_c  = 0,
+    /* Repair every blocked (FD_NONE) tile in one multi-source BFS seeded from all
+     * flowing tiles, so the whole field is patched in a single O(FIELD_RES^2) pass
+     * instead of one flood per blocked unit. Each blocked tile points back toward
+     * the flowing tile that reached it first. Like N_FlowFieldEscapeDir this heads
+     * for the nearest flowing tile rather than an island-aware exit; ClearPath
+     * covers the rest. A tile that a flowing neighbour already points into is the
+     * destination and is left blocked so settling units stop on it.
+     */
+    static const struct coord neighb[8] = {
+        {-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}
+    };
+    static const enum flow_dir toward_neighb[8] = {
+        FD_NW, FD_N, FD_NE, FD_W, FD_E, FD_SW, FD_S, FD_SE
+    };
+    static const enum flow_dir toward_parent[8] = {
+        FD_SE, FD_S, FD_SW, FD_E, FD_W, FD_NE, FD_N, FD_NW
     };
 
-    pq_coord_t frontier;
-    pq_coord_init(&frontier);
+    struct coord queue[FIELD_RES_R * FIELD_RES_C];
+    bool enqueued[FIELD_RES_R][FIELD_RES_C] = {0};
+    size_t head = 0, tail = 0;
 
-    struct coord init_frontier[FIELD_RES_R * FIELD_RES_C];
-    size_t ninit = 0;
-
-    if(inout_flow->target.type == TARGET_ENEMIES) {
-
-        struct tile_desc enemies_init_frontier[FIELD_RES_R * FIELD_RES_C];
-        size_t ntds = field_enemies_initial_frontier(&inout_flow->target.enemies, priv, base, 
-            FIELD_RES_R, FIELD_RES_C, layer, ctx, enemies_init_frontier, ARR_SIZE(enemies_init_frontier));
-        for(int i = 0; i < ntds; i++) {
-            init_frontier[ninit++] = (struct coord){
-                enemies_init_frontier[i].tile_r,
-                enemies_init_frontier[i].tile_c,
-            };
+    for(int r = 0; r < FIELD_RES_R; r++) {
+    for(int c = 0; c < FIELD_RES_C; c++) {
+        if(ff->field[r][c].dir_idx != FD_NONE) {
+            enqueued[r][c] = true;
+            queue[tail++] = (struct coord){r, c};
         }
-        assert(ninit == ntds);
+    }}
 
-    }else if(inout_flow->target.type == TARGET_ENTITY) {
-
-        struct tile_desc entity_init_frontier[FIELD_RES_R * FIELD_RES_C];
-        size_t ntds = field_entity_initial_frontier(&inout_flow->target.ent, priv, base, 
-            FIELD_RES_R, FIELD_RES_C, layer, ctx, entity_init_frontier, ARR_SIZE(entity_init_frontier));
-        for(int i = 0; i < ntds; i++) {
-            init_frontier[ninit++] = (struct coord){
-                entity_init_frontier[i].tile_r,
-                entity_init_frontier[i].tile_c,
-            };
-        }
-        assert(ninit == ntds);
-    
-    }else{
-        ninit = field_initial_frontier(layer, inout_flow->target, chunk, priv, false, faction_id, 
-            ctx, init_frontier, ARR_SIZE(init_frontier));
-        /* If there were no tiles in the initial frontier, that means the target
-         * was completely blocked off. */
-        if(!ninit) {
-            ninit = field_initial_frontier(layer, inout_flow->target, chunk, priv, true, faction_id, 
-                ctx, init_frontier, ARR_SIZE(init_frontier));
+    while(head < tail) {
+        struct coord cur = queue[head++];
+        for(int i = 0; i < 8; i++) {
+            int nr = cur.r + neighb[i].r, nc = cur.c + neighb[i].c;
+            if(nr < 0 || nr >= FIELD_RES_R || nc < 0 || nc >= FIELD_RES_C)
+                continue;
+            if(enqueued[nr][nc])
+                continue;
+            if(ff->field[cur.r][cur.c].dir_idx == toward_neighb[i])
+                continue;
+            ff->field[nr][nc].dir_idx = toward_parent[i];
+            enqueued[nr][nc] = true;
+            queue[tail++] = (struct coord){nr, nc};
         }
     }
-
-    /* the new frontier can have some duplicate coordiantes */
-    int min_mh_dist = INT_MAX;
-    struct coord new_init_frontier[FIELD_RES_R * FIELD_RES_C];
-    size_t new_ninit = 0;
-
-    for(int i = 0; i < ninit; i++) {
-
-        struct coord curr = init_frontier[i];
-        uint16_t curr_giid = chunk->islands[curr.r][curr.c];
-        uint16_t curr_liid = chunk->local_islands[curr.r][curr.c];
-
-        /* In case any part of the frontier has tiles matching the desired local ID, 
-         * then only include those tiles. This means at least some part of the frontier
-         * is reachable from the specified island.
-         */
-        if(curr_liid == local_iid) {
-            if(min_mh_dist > 0)
-                new_ninit = 0;
-            min_mh_dist = 0;
-            new_init_frontier[new_ninit++] = curr;
-            continue;
-        }
-
-        struct coord tmp[FIELD_RES_R * FIELD_RES_C];
-        int nextra = field_closest_tiles_local(chunk, chunk_coord, curr, local_iid, curr_giid, 
-            tmp, ARR_SIZE(tmp) - new_ninit);
-        if(!nextra)
-            continue;
-
-        int mh_dist = manhattan_dist(tmp[0], curr);
-        if(mh_dist < min_mh_dist) {
-            min_mh_dist = mh_dist;
-            new_ninit = 0;
-        }
-
-        if(mh_dist > min_mh_dist)
-            continue;
-
-        memcpy(new_init_frontier + new_ninit, tmp, nextra * sizeof(struct coord));
-        new_ninit += nextra;
-    }
-
-    float integration_field[FIELD_RES_R][FIELD_RES_C];
-    for(int r = 0; r < FIELD_RES_R; r++)
-        for(int c = 0; c < FIELD_RES_C; c++)
-            integration_field[r][c] = INFINITY;
-
-    for(int i = 0; i < new_ninit; i++) {
-
-        struct coord curr = new_init_frontier[i];
-        pq_coord_push(&frontier, 0.0f, curr); 
-        integration_field[curr.r][curr.c] = 0.0f;
-    }
-
-    field_build_integration(&frontier, chunk, faction_id, ctx, integration_field);
-    field_build_flow(integration_field, inout_flow);
-    field_fixup(priv, layer, inout_flow->target, integration_field, inout_flow, chunk);
-
-    pq_coord_destroy(&frontier);
+    ff->patched = true;
 }
 
 vec2_t N_FlowDir(enum flow_dir dir)

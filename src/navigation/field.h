@@ -103,6 +103,7 @@ struct field_target{
 struct flow_field{
     struct coord chunk;
     struct field_target target;
+    uint8_t patched;   /* blocked tiles filled toward the nearest flowing tile */
     struct{
         uint8_t dir_idx : 4;
     }field[FIELD_RES_R][FIELD_RES_C];
@@ -152,35 +153,21 @@ void    N_FlowFieldUpdate(struct coord               chunk_coord,
                           struct flow_field         *inout_flow);
 
 /* ------------------------------------------------------------------------
- * Update all tiles with a specific local island ID from the
- * 'local_islands' field for the chunk. The new directions will guide to
- * the closest possible tiles to the original field target. In the case
- * that the original field target tiles all are all on the same local
- * island (local_iid), the field will remain unchanged.
+ * Returns the escape direction for a blocked tile (start) toward the nearest
+ * tile carrying a valid flow direction in the field. Read-only: computes one
+ * tile hint without copying or flooding the field, so it runs in the parallel
+ * desired-velocity phase. Returns FD_NONE if no flow tile is reachable.
  * ------------------------------------------------------------------------
  */
-void    N_FlowFieldUpdateIslandToNearest(uint16_t                   local_iid, 
-                                         const struct nav_private  *priv,
-                                         enum nav_layer             layer, 
-                                         int                        faction_id, 
-                                         struct nav_unit_query_ctx *ctx,
-                                         struct flow_field         *inout_flow);
+enum flow_dir N_FlowFieldEscapeDir(struct coord start, const struct flow_field *ff);
 
 /* ------------------------------------------------------------------------
- * Update all tiles for for the 'impassable island' that start is a part of
- * (i.e. the start tile and all impassable tiles that are connected to it via
- * other impassable tiles) to guide to the closest passable tiles on the same 
- * chunk. This can be used to guide entities back to a passable tile if they 
- * somehow end up on an impassable one.
+ * Fill every blocked (FD_NONE) tile in the field with a direction toward the
+ * nearest flowing tile, in a single pass, and set the 'patched' flag. Repairs
+ * the whole field once rather than per blocked unit.
  * ------------------------------------------------------------------------
  */
-void N_FlowFieldUpdateToNearestPathable(const struct nav_private  *priv, 
-                                        enum nav_layer             layer,
-                                        struct coord               chunk,
-                                        struct coord               start, 
-                                        int                        faction_id, 
-                                        struct nav_unit_query_ctx *ctx,
-                                        struct flow_field         *inout_flow);
+void N_FlowFieldPatchBlocked(struct flow_field *ff);
 
 /* ------------------------------------------------------------------------
  * Create a line of sight field, indicating which tiles in this chunk are 

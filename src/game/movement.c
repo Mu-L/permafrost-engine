@@ -271,6 +271,7 @@ struct move_work_in{
     vec_cp_ent_t  *stat_neighbs;
     vec_cp_ent_t  *dyn_neighbs;
     bool           has_dest_los;
+    bool           needs_los_build;
     struct formation_state fstate;
     vec2_t         cell_arrival_vdes;
 };
@@ -4162,20 +4163,59 @@ static void interpolate_tick(void *user, void *event)
     PERF_RETURN_VOID();
 }
 
-static void compute_los_state(void)
+static struct result move_los_peek_task(void *arg)
 {
-    PERF_ENTER();
-    for(int i = 0; i < s_move_work.nwork; i++) {
+    uint64_t t0 = SDL_GetPerformanceCounter();
+    struct move_task_arg *move_arg = arg;
+    const struct map *map = s_move_work.gamestate.map;
+    size_t ncomputed = 0;
+
+    for(int i = move_arg->begin_idx; i <= move_arg->end_idx; i++) {
 
         struct move_work_in *in = &s_move_work.in[i];
         const struct movestate *ms = movestate_get(in->ent_uid);
         const struct flock *fl = flock_for_ent(in->ent_uid);
         vec2_t pos = (vec2_t){ms->prev_pos.x, ms->prev_pos.z};
 
-        in->has_dest_los = (fl
-            && (ms->state != STATE_SURROUND_ENTITY || !ms->using_surround_field))
-            ? M_NavHasDestLOS(s_move_work.gamestate.map, fl->dest_id, pos, fl->target_xz)
-            : false;
+        in->has_dest_los = false;
+        in->needs_los_build = false;
+        if(fl && (ms->state != STATE_SURROUND_ENTITY || !ms->using_surround_field)) {
+            bool present;
+            bool vis = M_NavHasDestLOSCached(map, fl->dest_id, pos, &present);
+            in->has_dest_los = present && vis;
+            in->needs_los_build = !present;
+        }
+        ncomputed++;
+
+        if(ncomputed % 16 == 0)
+            Task_Yield();
+    }
+    Perf_NavParallelAddSince(t0);
+    return NULL_RESULT;
+}
+
+static void compute_los_state(void)
+{
+    PERF_ENTER();
+
+    /* Parallel read: peek each unit's cached LOS read-only and flag the misses. */
+    move_submit_cpu_work(move_los_peek_task);
+    move_complete_cpu_work();
+
+    /* Serial build: construct the LOS field for the flagged units, which mutates
+     * the shared cache.
+     */
+    const struct map *map = s_move_work.gamestate.map;
+    for(int i = 0; i < s_move_work.nwork; i++) {
+
+        struct move_work_in *in = &s_move_work.in[i];
+        if(!in->needs_los_build)
+            continue;
+
+        const struct movestate *ms = movestate_get(in->ent_uid);
+        const struct flock *fl = flock_for_ent(in->ent_uid);
+        vec2_t pos = (vec2_t){ms->prev_pos.x, ms->prev_pos.z};
+        in->has_dest_los = M_NavHasDestLOS(map, fl->dest_id, pos, fl->target_xz);
 
         Sched_TryYield();
     }

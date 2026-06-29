@@ -812,6 +812,11 @@ bool M_NavHasDestLOS(const struct map *map, dest_id_t id, vec2_t curr_pos, vec2_
     return N_HasDestLOS(id, curr_pos, map->nav_private, map->pos, xz_dest);
 }
 
+bool M_NavHasDestLOSCached(const struct map *map, dest_id_t id, vec2_t curr_pos, bool *out_present)
+{
+    return N_HasDestLOSCached(id, curr_pos, map->nav_private, map->pos, out_present);
+}
+
 bool M_NavPositionPathable(const struct map *map, enum nav_layer layer, vec2_t xz_pos)
 {
     struct box map_box = (struct  box){

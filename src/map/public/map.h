@@ -415,6 +415,13 @@ void   M_NavServicePathRequest(const struct map *map, struct target target, vec2
 bool   M_NavHasDestLOS(const struct map *map, dest_id_t id, vec2_t curr_pos, vec2_t xz_dest);
 
 /* ------------------------------------------------------------------------
+ * Like M_NavHasDestLOS but read-only: peeks the cached LOS field rather than
+ * building it. Sets '*out_present' to whether the field was cached.
+ * ------------------------------------------------------------------------
+ */
+bool   M_NavHasDestLOSCached(const struct map *map, dest_id_t id, vec2_t curr_pos, bool *out_present);
+
+/* ------------------------------------------------------------------------
  * Returns true if the particular entity is in direct line of sight of the 
  * specified position.
  * ------------------------------------------------------------------------

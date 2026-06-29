@@ -440,6 +440,15 @@ bool      N_HasDestLOS(dest_id_t id, vec2_t curr_pos, void *nav_private,
                        vec3_t map_pos, vec2_t xz_dest);
 
 /* ------------------------------------------------------------------------
+ * Like N_HasDestLOS but read-only: peeks the cached LOS field instead of
+ * building it on a miss. Sets '*out_present' to whether the field was cached;
+ * returns false when it is not.
+ * ------------------------------------------------------------------------
+ */
+bool      N_HasDestLOSCached(dest_id_t id, vec2_t curr_pos, void *nav_private,
+                             vec3_t map_pos, bool *out_present);
+
+/* ------------------------------------------------------------------------
  * Returns true if the specified XZ position is pathable.
  * ------------------------------------------------------------------------
  */

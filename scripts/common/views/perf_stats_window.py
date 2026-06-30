@@ -1,7 +1,35 @@
 #
-#  This file is part of EVERGLORY
-#  Copyright (C) 2020 Eduard Permyakov 
-#  All rights reserved.
+#  This file is part of Permafrost Engine.
+#  Copyright (C) 2020-2026 Eduard Permyakov
+#
+#  Permafrost Engine is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation, either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  Permafrost Engine is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+#  Linking this software statically or dynamically with other modules is making
+#  a combined work based on this software. Thus, the terms and conditions of
+#  the GNU General Public License cover the whole combination.
+#
+#  As a special exception, the copyright holders of Permafrost Engine give
+#  you permission to link Permafrost Engine with independent modules to produce
+#  an executable, regardless of the license terms of these independent
+#  modules, and to copy and distribute the resulting executable under
+#  terms of your choice, provided that you also meet, for each linked
+#  independent module, the terms and conditions of the license of that
+#  module. An independent module is a module which is not derived from
+#  or based on Permafrost Engine. If you modify Permafrost Engine, you may
+#  extend this exception to your version of Permafrost Engine, but you are not
+#  obliged to do so. If you do not wish to do so, delete this exception
+#  statement from your version.
 #
 
 import pf
@@ -27,6 +55,7 @@ class PerfStatsWindow(pf.Window):
         self.frame_mem_usage = [0]*100
         self.frame_mem_accounting = [{}]*100
         self.frame_thread_roots = [None]*100
+        self.nav_tick_samples = []
         self.selected_perfstats = ()
         self.expanded_paths = set()
         self.paused = False
@@ -166,29 +195,114 @@ class PerfStatsWindow(pf.Window):
         self.label_colored_wrap("Vendor: %s" % render_info["vendor"], (255, 255, 255))
 
     def nav_stats_tab(self):
+        samples   = self.nav_tick_samples[-50:]
+        durs_us   = [s[0] for s in samples]
+        serial_us = [s[1] for s in samples]
+        total_us  = [s[2] for s in samples]
+        nwork     = [s[3] for s in samples]
+        budget_us = samples[-1][4] if len(samples) else 0
+        over = len([d for d in durs_us if budget_us and d > budget_us])
+        peak = max(durs_us) if len(durs_us) else 0
+        ymax = int(max(peak, budget_us) * 1.1)
+        if ymax < 1:
+            ymax = 1
+
+        WALL_COLOR   = (80, 200, 255)
+        SERIAL_COLOR = (255, 180, 60)
+
+        self.layout_row_dynamic(20, 1)
+        self.label_colored_wrap("Navigation tick time (last 50 ticks)", (255, 255, 0))
+
+        self.layout_row_begin(pf.NK_STATIC, 16, 2)
+        self.layout_row_push(110)
+        self.label_colored("- Wall", pf.NK_TEXT_LEFT, WALL_COLOR)
+        self.layout_row_push(110)
+        self.label_colored("- Serial", pf.NK_TEXT_LEFT, SERIAL_COLOR)
+        self.layout_row_end()
+
+        if len(durs_us):
+            self.layout_row_dynamic(120, 1)
+            self.multi_chart(pf.NK_CHART_LINES, (0, ymax), [durs_us, serial_us],
+                [WALL_COLOR, SERIAL_COLOR])
+
+        ROW_H      = 20
+        HDR_COLOR  = (255, 255, 0)
+        DATA_COLOR = (180, 220, 255)
+        M_NAME_W   = 150
+        M_COL_W    = 110
+
+        def cur_avg_max(vals):
+            if not len(vals):
+                return 0, 0.0, 0
+            return vals[-1], sum(vals) / float(len(vals)), max(vals)
+
+        def mrow(name, c, a, m, color):
+            self.layout_row_begin(pf.NK_STATIC, ROW_H, 4)
+            self.layout_row_push(M_NAME_W)
+            self.label_colored(name, pf.NK_TEXT_LEFT, color)
+            self.layout_row_push(M_COL_W)
+            self.label_colored(c, pf.NK_TEXT_RIGHT, color)
+            self.layout_row_push(M_COL_W)
+            self.label_colored(a, pf.NK_TEXT_RIGHT, color)
+            self.layout_row_push(M_COL_W)
+            self.label_colored(m, pf.NK_TEXT_RIGHT, color)
+            self.layout_row_end()
+
+        def ms_row(name, vals):
+            c, a, m = cur_avg_max(vals)
+            mrow(name, "{:.2f} ms".format(c / 1000.0), "{:.2f} ms".format(a / 1000.0),
+                "{:.2f} ms".format(m / 1000.0), DATA_COLOR)
+
+        mrow("Metric", "Current", "Average", "Maximum", HDR_COLOR)
+        ms_row("Wall",      durs_us)
+        ms_row("Serial",    serial_us)
+        ms_row("Total CPU", total_us)
+        nc, na, nm = cur_avg_max(nwork)
+        mrow("Entities", "{:d}".format(nc), "{:d}".format(int(na)), "{:d}".format(nm), DATA_COLOR)
+
+        self.layout_row_dynamic(ROW_H, 1)
+        self.label_colored_wrap("Budget: {:.1f} ms    Over budget: {:d} / {:d}".format(
+            budget_us / 1000.0, over, len(durs_us)), DATA_COLOR)
+
+        self.layout_row_dynamic(12, 1)
+        self.label_colored_wrap(" ", (255, 255, 255))
+
         nav_stats = pf.get_nav_perfstats()
 
-        self.layout_row_dynamic(20, 1)
-        self.label_colored_wrap("[LOS Field Cache]   Used: {used:04d}/{cap:04d}  Hit Rate: {hr:02.03f} Invalidated: {inv:04d}" \
-            .format(used=nav_stats["los_used"], cap=nav_stats["los_max"], 
-            hr=nav_stats["los_hit_rate"], inv=nav_stats["los_invalidated"]), \
-            (0, 255, 0))
+        NAME_W = 220
+        USED_W = 130
+        HR_W   = 110
+        INV_W  = 110
 
-        self.layout_row_dynamic(20, 1)
-        self.label_colored_wrap("[Flow Field Cache]   Used: {used:04d}/{cap:04d}   Hit Rate: {hr:02.03f} Invalidated: {inv:04d}" \
-            .format(used=nav_stats["flow_used"], cap=nav_stats["flow_max"], 
-            hr=nav_stats["flow_hit_rate"], inv=nav_stats["flow_invalidated"]), \
-            (0, 255, 0))
+        def crow(name, used, hr, inv, color):
+            self.layout_row_begin(pf.NK_STATIC, ROW_H, 4)
+            self.layout_row_push(NAME_W)
+            self.label_colored(name, pf.NK_TEXT_LEFT, color)
+            self.layout_row_push(USED_W)
+            self.label_colored(used, pf.NK_TEXT_RIGHT, color)
+            self.layout_row_push(HR_W)
+            self.label_colored(hr, pf.NK_TEXT_RIGHT, color)
+            self.layout_row_push(INV_W)
+            self.label_colored(inv, pf.NK_TEXT_RIGHT, color)
+            self.layout_row_end()
 
-        self.layout_row_dynamic(20, 1)
-        self.label_colored_wrap("[Dest:Field Mapping Cache] Used: {used:04d}/{cap:04d}   Hit Rate: {hr:02.03f}" \
-            .format(used=nav_stats["ffid_used"], cap=nav_stats["ffid_max"], hr=nav_stats["ffid_hit_rate"]), \
-            (0, 255, 0))
-
-        self.layout_row_dynamic(20, 1)
-        self.label_colored_wrap("[Grid Path Cache] Used: {used:04d}/{cap:04d}   Hit Rate: {hr:02.03f}" \
-            .format(used=nav_stats["grid_path_used"], cap=nav_stats["grid_path_max"], hr=nav_stats["grid_path_hit_rate"]), \
-            (0, 255, 0))
+        crow("Cache", "Used/Max", "Hit Rate", "Invalidated", (255, 255, 0))
+        crow("LOS Field",
+            "{:d}/{:d}".format(nav_stats["los_used"], nav_stats["los_max"]),
+            "{:.3f}".format(nav_stats["los_hit_rate"]),
+            "{:d}".format(nav_stats["los_invalidated"]), (0, 255, 0))
+        crow("Flow Field",
+            "{:d}/{:d}".format(nav_stats["flow_used"], nav_stats["flow_max"]),
+            "{:.3f}".format(nav_stats["flow_hit_rate"]),
+            "{:d}".format(nav_stats["flow_invalidated"]), (0, 255, 0))
+        crow("Dest:Field Mapping",
+            "{:d}/{:d}".format(nav_stats["ffid_used"], nav_stats["ffid_max"]),
+            "{:.3f}".format(nav_stats["ffid_hit_rate"]),
+            "-", (0, 255, 0))
+        crow("Grid Path",
+            "{:d}/{:d}".format(nav_stats["grid_path_used"], nav_stats["grid_path_max"]),
+            "{:.3f}".format(nav_stats["grid_path_hit_rate"]),
+            "-", (0, 255, 0))
 
     def threads_tab(self):
         current = self.frame_perfstats[self.tickindex]
@@ -548,6 +662,51 @@ class PerfStatsWindow(pf.Window):
         render_row(0, "TOTAL", total_bytes, total_count, False,
             ("gpuacc", "__total"), TOTAL_COLOR)
 
+    def gpu_frame_stats_tab(self):
+        stats = pf.prev_frame_gpu_stats()
+
+        LABEL_W      = 300
+        VALUE_W      = 180
+        ROW_H        = 20
+        LABEL_COLOR  = (180, 220, 255)
+        VALUE_COLOR  = (255, 220, 0)
+
+        def fmt_count(n):
+            if n >= 1000 ** 3:
+                return "{:.2f} B".format(n / float(1000 ** 3))
+            if n >= 1000 ** 2:
+                return "{:.2f} M".format(n / float(1000 ** 2))
+            if n >= 1000:
+                return "{:.2f} K".format(n / float(1000))
+            return "{:d}".format(int(n))
+
+        def row(label, value):
+            self.layout_row_begin(pf.NK_STATIC, ROW_H, 2)
+            self.layout_row_push(LABEL_W)
+            self.label_colored(label, pf.NK_TEXT_LEFT, LABEL_COLOR)
+            self.layout_row_push(VALUE_W)
+            self.label_colored(value, pf.NK_TEXT_RIGHT, VALUE_COLOR)
+            self.layout_row_end()
+
+        row("Vertices submitted",          fmt_count(stats["verts_submitted"]))
+        row("Primitives submitted",        fmt_count(stats["prims_submitted"]))
+        row("Vertex shader invocations",   fmt_count(stats["vs_invocations"]))
+        row("Clipping input primitives",   fmt_count(stats["clip_in_prims"]))
+        row("Clipping output primitives",  fmt_count(stats["clip_out_prims"]))
+        row("Fragment shader invocations", fmt_count(stats["frag_invocations"]))
+
+        clip_in  = stats["clip_in_prims"]
+        clip_out = stats["clip_out_prims"]
+        frag     = stats["frag_invocations"]
+
+        cull_pct       = (1.0 - clip_out / float(clip_in)) * 100.0 if clip_in > 0 else 0.0
+        frags_per_prim = frag / float(clip_out) if clip_out > 0 else 0.0
+
+        self.layout_row_dynamic(8, 1)
+        self.label_colored("", pf.NK_TEXT_LEFT, LABEL_COLOR)
+        row("Primitives culled",           "{:.1f}%".format(cull_pct))
+        row("Avg fragments / primitive",   "{:.1f}".format(frags_per_prim))
+
     def on_chart_click(self, index):
         self.selected_perfstats = self.frame_perfstats[index]
 
@@ -559,6 +718,7 @@ class PerfStatsWindow(pf.Window):
         self.frame_mem_usage = [0]*100
         self.frame_mem_accounting = [{}]*100
         self.frame_thread_roots = [None]*100
+        self.nav_tick_samples = []
         self.selected_perfstats = ()
         self.expanded_paths = set()
         self.tickindex = 0
@@ -577,6 +737,7 @@ class PerfStatsWindow(pf.Window):
             new_allocd = pf.prev_frame_allocd_bytes()
             new_memstats = pf.prev_frame_memstats()
             new_mem_accounting = pf.prev_frame_mem_accounting()
+            self.nav_tick_samples = pf.get_nav_tick_times()
             curr_total_mem = new_memstats["vm_rss_kb"]
 
             if newtick > self.max_frame_latency:
@@ -643,6 +804,7 @@ class PerfStatsWindow(pf.Window):
 
         self.tree(pf.NK_TREE_TAB, "Memory", pf.NK_MINIMIZED, self.memory_tab)
         self.tree(pf.NK_TREE_TAB, "Video Memory", pf.NK_MINIMIZED, self.video_memory_tab)
+        self.tree(pf.NK_TREE_TAB, "GPU Frame Statistics", pf.NK_MINIMIZED, self.gpu_frame_stats_tab)
         self.tree(pf.NK_TREE_TAB, "Frame Performance", pf.NK_MINIMIZED, self.frame_perf_tab)
         self.tree(pf.NK_TREE_TAB, "Threads", pf.NK_MINIMIZED, self.threads_tab)
         self.tree(pf.NK_TREE_TAB, "Renderer Info", pf.NK_MINIMIZED, self.render_info_tab)

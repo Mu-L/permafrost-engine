@@ -187,7 +187,8 @@
                                                                                                 \
     scope bool vec_##name##_copy(vec(name) *dst, vec(name) *src)                                \
     {                                                                                           \
-        if(!vec_##name##_resize(dst, vec_size(src)))                                            \
+        if(dst->capacity < vec_size(src)                                                        \
+        && !vec_##name##_resize(dst, vec_size(src)))                                            \
             return false;                                                                       \
                                                                                                 \
         memcpy(dst->array, src->array, src->size * sizeof(type));                               \

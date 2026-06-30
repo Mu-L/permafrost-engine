@@ -2064,13 +2064,13 @@ void N_FlowFieldUpdate(
     }}
 
     struct coord init_frontier[FIELD_RES_R * FIELD_RES_C];
-    size_t ninit = field_initial_frontier(layer, target, chunk, priv, false, faction_id, 
+    size_t ninit = field_initial_frontier(layer, target, chunk, priv, false, faction_id,
         ctx, init_frontier, ARR_SIZE(init_frontier));
 
     for(int i = 0; i < ninit; i++) {
 
         struct coord curr = init_frontier[i];
-        pq_coord_push(&frontier, 0.0f, curr); 
+        pq_coord_push(&frontier, 0.0f, curr);
         integration_field[curr.r][curr.c] = 0.0f;
     }
 
@@ -2081,6 +2081,129 @@ void N_FlowFieldUpdate(
 
     pq_coord_destroy(&frontier);
     PERF_RETURN_VOID();
+}
+
+void N_FlowFieldUpdateIslandToNearest(
+    uint16_t                   local_iid,
+    const struct nav_private  *priv,
+    enum nav_layer             layer,
+    int                        faction_id,
+    struct nav_unit_query_ctx *ctx,
+    struct flow_field         *inout_flow)
+{
+    struct coord chunk_coord = inout_flow->chunk;
+    const struct nav_chunk *chunk = &priv->chunks[layer][IDX(chunk_coord.r, priv->width, chunk_coord.c)];
+
+    struct tile_desc base = (struct tile_desc){
+        .chunk_r = chunk_coord.r,
+        .chunk_c = chunk_coord.c,
+        .tile_r  = 0,
+        .tile_c  = 0,
+    };
+
+    pq_coord_t frontier;
+    pq_coord_init(&frontier);
+
+    struct coord init_frontier[FIELD_RES_R * FIELD_RES_C];
+    size_t ninit = 0;
+
+    if(inout_flow->target.type == TARGET_ENEMIES) {
+
+        struct tile_desc enemies_init_frontier[FIELD_RES_R * FIELD_RES_C];
+        size_t ntds = field_enemies_initial_frontier(&inout_flow->target.enemies, priv, base,
+            FIELD_RES_R, FIELD_RES_C, layer, ctx, enemies_init_frontier, ARR_SIZE(enemies_init_frontier));
+        for(int i = 0; i < ntds; i++) {
+            init_frontier[ninit++] = (struct coord){
+                enemies_init_frontier[i].tile_r,
+                enemies_init_frontier[i].tile_c,
+            };
+        }
+        assert(ninit == ntds);
+
+    }else if(inout_flow->target.type == TARGET_ENTITY) {
+
+        struct tile_desc entity_init_frontier[FIELD_RES_R * FIELD_RES_C];
+        size_t ntds = field_entity_initial_frontier(&inout_flow->target.ent, priv, base,
+            FIELD_RES_R, FIELD_RES_C, layer, ctx, entity_init_frontier, ARR_SIZE(entity_init_frontier));
+        for(int i = 0; i < ntds; i++) {
+            init_frontier[ninit++] = (struct coord){
+                entity_init_frontier[i].tile_r,
+                entity_init_frontier[i].tile_c,
+            };
+        }
+        assert(ninit == ntds);
+
+    }else{
+        ninit = field_initial_frontier(layer, inout_flow->target, chunk, priv, false, faction_id,
+            ctx, init_frontier, ARR_SIZE(init_frontier));
+        /* If there were no tiles in the initial frontier, that means the target
+         * was completely blocked off.
+         */
+        if(!ninit) {
+            ninit = field_initial_frontier(layer, inout_flow->target, chunk, priv, true, faction_id,
+                ctx, init_frontier, ARR_SIZE(init_frontier));
+        }
+    }
+
+    /* The new frontier can have some duplicate coordinates. */
+    int min_mh_dist = INT_MAX;
+    struct coord new_init_frontier[FIELD_RES_R * FIELD_RES_C];
+    size_t new_ninit = 0;
+
+    for(int i = 0; i < ninit; i++) {
+
+        struct coord curr = init_frontier[i];
+        uint16_t curr_giid = chunk->islands[curr.r][curr.c];
+        uint16_t curr_liid = chunk->local_islands[curr.r][curr.c];
+
+        /* In case any part of the frontier has tiles matching the desired local ID,
+         * then only include those tiles. This means at least some part of the frontier
+         * is reachable from the specified island.
+         */
+        if(curr_liid == local_iid) {
+            if(min_mh_dist > 0)
+                new_ninit = 0;
+            min_mh_dist = 0;
+            new_init_frontier[new_ninit++] = curr;
+            continue;
+        }
+
+        struct coord tmp[FIELD_RES_R * FIELD_RES_C];
+        int nextra = field_closest_tiles_local(chunk, chunk_coord, curr, local_iid, curr_giid,
+            tmp, ARR_SIZE(tmp) - new_ninit);
+        if(!nextra)
+            continue;
+
+        int mh_dist = manhattan_dist(tmp[0], curr);
+        if(mh_dist < min_mh_dist) {
+            min_mh_dist = mh_dist;
+            new_ninit = 0;
+        }
+
+        if(mh_dist > min_mh_dist)
+            continue;
+
+        memcpy(new_init_frontier + new_ninit, tmp, nextra * sizeof(struct coord));
+        new_ninit += nextra;
+    }
+
+    float integration_field[FIELD_RES_R][FIELD_RES_C];
+    for(int r = 0; r < FIELD_RES_R; r++)
+        for(int c = 0; c < FIELD_RES_C; c++)
+            integration_field[r][c] = INFINITY;
+
+    for(int i = 0; i < new_ninit; i++) {
+
+        struct coord curr = new_init_frontier[i];
+        pq_coord_push(&frontier, 0.0f, curr);
+        integration_field[curr.r][curr.c] = 0.0f;
+    }
+
+    field_build_integration(&frontier, chunk, faction_id, ctx, integration_field);
+    field_build_flow(integration_field, inout_flow);
+    field_fixup(priv, layer, inout_flow->target, integration_field, inout_flow, chunk);
+
+    pq_coord_destroy(&frontier);
 }
 
 void N_LOSFieldCreate(

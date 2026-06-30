@@ -1807,7 +1807,7 @@ static bool n_request_path(void *nav_private, vec2_t xz_src, vec2_t xz_dest, int
     uint16_t dst_iid = dst_chunk->islands[dst_desc.tile_r][dst_desc.tile_c];
 
     if(src_iid != dst_iid) {
-        PERF_RETURN(false); 
+        PERF_RETURN(false);
     }
 
     /* Even if a mapping exists, the actual flow field may have been evicted from
@@ -1885,7 +1885,7 @@ static bool n_request_path(void *nav_private, vec2_t xz_src, vec2_t xz_dest, int
     }
 
     if(!dst_port) {
-        PERF_RETURN(false); 
+        PERF_RETURN(false);
     }
 
     float cost;
@@ -1930,7 +1930,7 @@ static bool n_request_path(void *nav_private, vec2_t xz_src, vec2_t xz_dest, int
             *out_dest_id = ret;
             PERF_RETURN(true);
         }else{
-            PERF_RETURN(false); 
+            PERF_RETURN(false);
         }
     }
 
@@ -3654,10 +3654,13 @@ void N_ServicePathRequest(void *nav_private, vec3_t map_pos, struct target targe
         }
     }
 
-    /* The first unit to reach a passable tile cut off from the target patches the
-     * whole field at once: every blocked tile is filled toward the nearest flowing
-     * tile, so the rest read it free. Impassable tiles (ISLAND_NONE) are steered
-     * off read-only in the desired-velocity phase, not patched here.
+    /* The unit is on a passable tile with no flow. When the field carries flow
+     * elsewhere, fill the blocked tiles toward the nearest flowing one in a single
+     * cheap pass that the rest read for free. When the field is wholly empty (the
+     * target was sealed off by a crowd of blockers, so its seed could not
+     * propagate), the patch has nothing to work from; rebuild toward the nearest
+     * tiles of the unit's own island instead. Impassable tiles (ISLAND_NONE) are
+     * steered off read-only in the desired-velocity phase, not handled here.
      */
     const struct flow_field *ff = N_FC_FlowFieldAt(priv->fieldcache, ffid);
     if(!ff || ff->patched || ff->field[tile.tile_r][tile.tile_c].dir_idx != FD_NONE)
@@ -3668,9 +3671,25 @@ void N_ServicePathRequest(void *nav_private, vec3_t map_pos, struct target targe
     if(nchunk->local_islands[tile.tile_r][tile.tile_c] == ISLAND_NONE)
         return;
 
-    struct flow_field patched = *ff;
-    N_FlowFieldPatchBlocked(&patched);
-    N_FC_PutFlowField(priv->fieldcache, ffid, &patched);
+    bool has_flow = false;
+    for(int r = 0; r < FIELD_RES_R && !has_flow; r++) {
+        for(int c = 0; c < FIELD_RES_C; c++) {
+            if(ff->field[r][c].dir_idx != FD_NONE) {
+                has_flow = true;
+                break;
+            }
+        }
+    }
+
+    struct flow_field rebuilt = *ff;
+    if(has_flow) {
+        N_FlowFieldPatchBlocked(&rebuilt);
+    }else{
+        uint16_t local_iid = nchunk->local_islands[tile.tile_r][tile.tile_c];
+        N_FlowFieldUpdateIslandToNearest(local_iid, priv, layer, faction_id,
+            priv->unit_query_ctx, &rebuilt);
+    }
+    N_FC_PutFlowField(priv->fieldcache, ffid, &rebuilt);
 }
 
 bool N_DesiredGroupArrivalVelocity(vec2_t curr_pos, void *nav_private, enum nav_layer layer,

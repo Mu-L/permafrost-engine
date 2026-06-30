@@ -153,6 +153,19 @@ void    N_FlowFieldUpdate(struct coord               chunk_coord,
                           struct flow_field         *inout_flow);
 
 /* ------------------------------------------------------------------------
+ * Rebuild the field to guide the 'local_iid' island toward the nearest tiles
+ * reachable from it, used when the target is sealed off by blockers and the
+ * normal field comes out wholly empty (which the cheap patch cannot repair).
+ * ------------------------------------------------------------------------
+ */
+void    N_FlowFieldUpdateIslandToNearest(uint16_t                   local_iid,
+                                         const struct nav_private  *priv,
+                                         enum nav_layer             layer,
+                                         int                        faction_id,
+                                         struct nav_unit_query_ctx *ctx,
+                                         struct flow_field         *inout_flow);
+
+/* ------------------------------------------------------------------------
  * Returns the escape direction for a blocked tile (start) toward the nearest
  * tile carrying a valid flow direction in the field. Read-only: computes one
  * tile hint without copying or flooding the field, so it runs in the parallel

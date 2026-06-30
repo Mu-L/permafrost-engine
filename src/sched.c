@@ -1168,7 +1168,7 @@ static bool do_run_sync(uint32_t tid, bool dequeue)
         sched_task_run(task);
         sched_task_service_request(task);
 
-    }else if(!idle) {
+    }else if(!idle && !pinned_off_main) {
         SDL_UnlockMutex(s_request_lock);
         S_Task_MaybeExit();
 

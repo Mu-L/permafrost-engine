@@ -39,7 +39,7 @@
 #include <stdbool.h>
 #include <SDL.h>
 
-#define CONFIG_SCHED_TARGET_FPS     (30)
+#define CONFIG_SCHED_TARGET_FPS     (60)
 
 /* The far end of the camera's clipping frustrum, in OpenGL coordinates */
 #define CONFIG_DRAWDIST             (1000)

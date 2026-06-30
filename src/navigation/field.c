@@ -2247,12 +2247,9 @@ void N_LOSFieldCreate(
 
 enum flow_dir N_FlowFieldEscapeDir(struct coord start, const struct flow_field *ff)
 {
-    /* Bounded BFS outward from the blocked tile 'start' to the nearest tile that
-     * carries a valid flow direction, returning the first step toward it. Reads
-     * only 'ff' and mutates nothing, so it runs in the parallel desired-velocity
-     * phase, replacing the per-entity field copy and flood fill for the common
-     * blocked-tile case.
-     */
+    /* Prefer the smallest Euclidean distance among the tiles the BFS reaches: a
+     * chebyshev BFS scores a diagonal step like a cardinal one and breaks ties
+     * toward the first-enumerated neighbour, leaning a packed formation diagonally. */
     static const struct coord neighb[8] = {
         {-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}
     };
@@ -2260,7 +2257,7 @@ enum flow_dir N_FlowFieldEscapeDir(struct coord start, const struct flow_field *
         FD_NW, FD_N, FD_NE, FD_W, FD_E, FD_SW, FD_S, FD_SE
     };
 
-    struct bfs_node{ struct coord tile; enum flow_dir first; };
+    struct bfs_node{ struct coord tile; enum flow_dir first; int ring; };
     bool visited[FIELD_RES_R][FIELD_RES_C] = {0};
     struct bfs_node queue[FIELD_RES_R * FIELD_RES_C];
     size_t head = 0, tail = 0;
@@ -2271,13 +2268,25 @@ enum flow_dir N_FlowFieldEscapeDir(struct coord start, const struct flow_field *
         if(nr < 0 || nr >= FIELD_RES_R || nc < 0 || nc >= FIELD_RES_C)
             continue;
         visited[nr][nc] = true;
-        queue[tail++] = (struct bfs_node){ (struct coord){nr, nc}, neighb_dir[i] };
+        queue[tail++] = (struct bfs_node){ (struct coord){nr, nc}, neighb_dir[i], 1 };
     }
 
+    int best_dist2 = INT_MAX;
+    enum flow_dir best = FD_NONE;
     while(head < tail) {
         struct bfs_node node = queue[head++];
-        if(ff->field[node.tile.r][node.tile.c].dir_idx != FD_NONE)
-            return node.first;
+        /* Ring-ordered: once ring^2 exceeds the best distance, nothing farther is closer. */
+        if((long)node.ring * node.ring > best_dist2)
+            break;
+        if(ff->field[node.tile.r][node.tile.c].dir_idx != FD_NONE) {
+            int dr = node.tile.r - start.r, dc = node.tile.c - start.c;
+            int dist2 = dr * dr + dc * dc;
+            if(dist2 < best_dist2) {
+                best_dist2 = dist2;
+                best = node.first;
+            }
+            continue;
+        }
         for(int i = 0; i < 8; i++) {
             int nr = node.tile.r + neighb[i].r, nc = node.tile.c + neighb[i].c;
             if(nr < 0 || nr >= FIELD_RES_R || nc < 0 || nc >= FIELD_RES_C)
@@ -2285,58 +2294,74 @@ enum flow_dir N_FlowFieldEscapeDir(struct coord start, const struct flow_field *
             if(visited[nr][nc])
                 continue;
             visited[nr][nc] = true;
-            queue[tail++] = (struct bfs_node){ (struct coord){nr, nc}, node.first };
+            queue[tail++] = (struct bfs_node){ (struct coord){nr, nc}, node.first, node.ring + 1 };
         }
     }
-    return FD_NONE;
+    return best;
 }
 
 void N_FlowFieldPatchBlocked(struct flow_field *ff)
 {
-    /* Repair every blocked (FD_NONE) tile in one multi-source BFS seeded from all
-     * flowing tiles, so the whole field is patched in a single O(FIELD_RES^2) pass
-     * instead of one flood per blocked unit. Each blocked tile points back toward
-     * the flowing tile that reached it first. Like N_FlowFieldEscapeDir this heads
-     * for the nearest flowing tile rather than an island-aware exit; ClearPath
-     * covers the rest. A tile that a flowing neighbour already points into is the
-     * destination and is left blocked so settling units stop on it.
-     */
+    /* Octile distance from all flowing tiles via a symmetric two-pass chamfer, then
+     * each blocked tile flows down the gradient (field_flow_dir) toward the nearest
+     * one. The chamfer avoids the diagonal lean a chebyshev BFS would give. A tile a
+     * flowing neighbour flows into is a sink, left blocked so units settle on it. */
     static const struct coord neighb[8] = {
         {-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}
-    };
-    static const enum flow_dir toward_neighb[8] = {
-        FD_NW, FD_N, FD_NE, FD_W, FD_E, FD_SW, FD_S, FD_SE
     };
     static const enum flow_dir toward_parent[8] = {
         FD_SE, FD_S, FD_SW, FD_E, FD_W, FD_NE, FD_N, FD_NW
     };
+    const float diag = 1.41421356f;
 
-    struct coord queue[FIELD_RES_R * FIELD_RES_C];
-    bool enqueued[FIELD_RES_R][FIELD_RES_C] = {0};
-    size_t head = 0, tail = 0;
+    float dist[FIELD_RES_R][FIELD_RES_C];
+    for(int r = 0; r < FIELD_RES_R; r++)
+    for(int c = 0; c < FIELD_RES_C; c++)
+        dist[r][c] = (ff->field[r][c].dir_idx != FD_NONE) ? 0.0f : INFINITY;
 
-    for(int r = 0; r < FIELD_RES_R; r++) {
+    for(int r = 0; r < FIELD_RES_R; r++)
     for(int c = 0; c < FIELD_RES_C; c++) {
-        if(ff->field[r][c].dir_idx != FD_NONE) {
-            enqueued[r][c] = true;
-            queue[tail++] = (struct coord){r, c};
-        }
-    }}
+        float d = dist[r][c];
+        if(r > 0)                      d = MIN(d, dist[r-1][c] + 1.0f);
+        if(r > 0 && c > 0)             d = MIN(d, dist[r-1][c-1] + diag);
+        if(r > 0 && c < FIELD_RES_C-1) d = MIN(d, dist[r-1][c+1] + diag);
+        if(c > 0)                      d = MIN(d, dist[r][c-1] + 1.0f);
+        dist[r][c] = d;
+    }
+    for(int r = FIELD_RES_R-1; r >= 0; r--)
+    for(int c = FIELD_RES_C-1; c >= 0; c--) {
+        float d = dist[r][c];
+        if(r < FIELD_RES_R-1)                      d = MIN(d, dist[r+1][c] + 1.0f);
+        if(r < FIELD_RES_R-1 && c < FIELD_RES_C-1) d = MIN(d, dist[r+1][c+1] + diag);
+        if(r < FIELD_RES_R-1 && c > 0)             d = MIN(d, dist[r+1][c-1] + diag);
+        if(c < FIELD_RES_C-1)                      d = MIN(d, dist[r][c+1] + 1.0f);
+        dist[r][c] = d;
+    }
 
-    while(head < tail) {
-        struct coord cur = queue[head++];
+    /* Mark sinks from the original field, before any patched direction is written. */
+    bool is_sink[FIELD_RES_R][FIELD_RES_C] = {0};
+    for(int r = 0; r < FIELD_RES_R; r++)
+    for(int c = 0; c < FIELD_RES_C; c++) {
+        if(ff->field[r][c].dir_idx != FD_NONE)
+            continue;
         for(int i = 0; i < 8; i++) {
-            int nr = cur.r + neighb[i].r, nc = cur.c + neighb[i].c;
+            int nr = r + neighb[i].r, nc = c + neighb[i].c;
             if(nr < 0 || nr >= FIELD_RES_R || nc < 0 || nc >= FIELD_RES_C)
                 continue;
-            if(enqueued[nr][nc])
-                continue;
-            if(ff->field[cur.r][cur.c].dir_idx == toward_neighb[i])
-                continue;
-            ff->field[nr][nc].dir_idx = toward_parent[i];
-            enqueued[nr][nc] = true;
-            queue[tail++] = (struct coord){nr, nc};
+            if(ff->field[nr][nc].dir_idx != FD_NONE
+            && ff->field[nr][nc].dir_idx == toward_parent[i]) {
+                is_sink[r][c] = true;
+                break;
+            }
         }
+    }
+
+    for(int r = 0; r < FIELD_RES_R; r++)
+    for(int c = 0; c < FIELD_RES_C; c++) {
+        if(ff->field[r][c].dir_idx != FD_NONE || is_sink[r][c] || dist[r][c] == INFINITY)
+            continue;
+        ff->field[r][c].dir_idx = field_flow_dir(FIELD_RES_R, FIELD_RES_C,
+            (const float*)dist, (struct coord){r, c});
     }
     ff->patched = true;
 }

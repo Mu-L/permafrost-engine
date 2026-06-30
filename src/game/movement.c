@@ -272,6 +272,7 @@ struct move_work_in{
     vec_cp_ent_t  *dyn_neighbs;
     bool           has_dest_los;
     bool           needs_los_build;
+    bool           los_queried;
     struct formation_state fstate;
     vec2_t         cell_arrival_vdes;
 };
@@ -4179,11 +4180,13 @@ static struct result move_los_peek_task(void *arg)
 
         in->has_dest_los = false;
         in->needs_los_build = false;
+        in->los_queried = false;
         if(fl && (ms->state != STATE_SURROUND_ENTITY || !ms->using_surround_field)) {
             bool present;
             bool vis = M_NavHasDestLOSCached(map, fl->dest_id, pos, &present);
             in->has_dest_los = present && vis;
             in->needs_los_build = !present;
+            in->los_queried = true;
         }
         ncomputed++;
 
@@ -4206,11 +4209,15 @@ static void compute_los_state(void)
      * the shared cache.
      */
     const struct map *map = s_move_work.gamestate.map;
+    unsigned checked = 0, misses = 0;
     for(int i = 0; i < s_move_work.nwork; i++) {
 
         struct move_work_in *in = &s_move_work.in[i];
+        if(in->los_queried)
+            checked++;
         if(!in->needs_los_build)
             continue;
+        misses++;
 
         const struct movestate *ms = movestate_get(in->ent_uid);
         const struct flock *fl = flock_for_ent(in->ent_uid);
@@ -4219,6 +4226,8 @@ static void compute_los_state(void)
 
         Sched_TryYield();
     }
+
+    M_NavAddLosSamples(map, checked, checked - misses);
     PERF_RETURN_VOID();
 }
 
@@ -4246,17 +4255,26 @@ static void compute_path_requests(void)
     const struct map *map = s_move_work.gamestate.map;
     uint64_t last_yield = SDL_GetPerformanceCounter();
     const uint64_t yield_ticks = SDL_GetPerformanceFrequency() / 500; /* ~2ms */
+    unsigned checked = 0, rebuilds = 0;
     for(int i = 0; i < s_move_work.nwork; i++) {
 
-        uint32_t uid = s_move_work.in[i].ent_uid;
+        struct move_work_in *in = &s_move_work.in[i];
+        uint32_t uid = in->ent_uid;
         const struct movestate *ms = movestate_get(uid);
         if(!ms || ms->state == STATE_TURNING || ms->state == STATE_ARRIVING_TO_CELL)
             continue;
 
         vec2_t pos = G_Pos_GetXZFrom(s_move_work.gamestate.positions, uid);
         struct target t = build_target(uid);
-        if(M_NavRequiresPathRequest(map, t, pos))
+        checked++;
+        /* Built this tick, by the LOS phase or a request here, counts as a miss. */
+        bool rebuilt = in->needs_los_build;
+        if(M_NavRequiresPathRequest(map, t, pos)) {
             M_NavServicePathRequest(map, t, pos);
+            rebuilt = true;
+        }
+        if(rebuilt)
+            rebuilds++;
 
         /* Arrival units may fall back to the group centre-of-mass point-seek field. */
         struct flock *fl = flock_for_ent(uid);
@@ -4273,6 +4291,8 @@ static void compute_path_requests(void)
             last_yield = SDL_GetPerformanceCounter();
         }
     }
+
+    M_NavAddFlowSamples(map, checked, checked - rebuilds);
     PERF_RETURN_VOID();
 }
 

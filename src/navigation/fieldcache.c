@@ -359,16 +359,26 @@ void N_FC_GetStats(struct fieldcache_ctx *ctx, struct fc_stats *out_stats)
         : ((float)ctx->perfstats.grid_path_hit) / ctx->perfstats.grid_path_query;
 }
 
+void N_FC_AddFlowSamples(struct fieldcache_ctx *ctx, unsigned query, unsigned hit)
+{
+    FC_ASSERT_NAV_TASK();
+    ctx->perfstats.flow_query += query;
+    ctx->perfstats.flow_hit   += hit;
+}
+
+void N_FC_AddLosSamples(struct fieldcache_ctx *ctx, unsigned query, unsigned hit)
+{
+    FC_ASSERT_NAV_TASK();
+    ctx->perfstats.los_query += query;
+    ctx->perfstats.los_hit   += hit;
+}
+
 bool N_FC_ContainsLOSField(struct fieldcache_ctx *ctx, dest_id_t id, 
                            struct coord chunk_coord)
 {
     FC_ASSERT_NAV_TASK();
     uint64_t key = key_for_dest_and_chunk(id, chunk_coord);
-    bool ret = lru_los_contains(&ctx->los_cache, key);
-
-    ctx->perfstats.los_query++;
-    ctx->perfstats.los_hit += !!ret;
-    return ret;
+    return lru_los_contains(&ctx->los_cache, key);
 }
 
 const struct LOS_field *N_FC_LOSFieldAt(struct fieldcache_ctx *ctx, dest_id_t id, 
@@ -391,11 +401,7 @@ void N_FC_PutLOSField(struct fieldcache_ctx *ctx, dest_id_t id,
 bool N_FC_ContainsFlowField(struct fieldcache_ctx *ctx, ff_id_t ffid)
 {
     FC_ASSERT_NAV_TASK();
-    bool ret = lru_flow_contains(&ctx->flow_cache, ffid);
-
-    ctx->perfstats.flow_query++;
-    ctx->perfstats.flow_hit += !!ret;
-    return ret;
+    return lru_flow_contains(&ctx->flow_cache, ffid);
 }
 
 const struct flow_field *N_FC_FlowFieldAt(struct fieldcache_ctx *ctx, ff_id_t ffid)

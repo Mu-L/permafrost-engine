@@ -5240,6 +5240,20 @@ void N_FC_GetStatsAt(void *nav_private, struct fc_stats *out_stats)
     N_FC_GetStats(priv->fieldcache, out_stats);
 }
 
+void N_FC_AddFlowSamplesAt(void *nav_private, unsigned query, unsigned hit)
+{
+    assert(nav_private);
+    struct nav_private *priv = (struct nav_private*)nav_private;
+    N_FC_AddFlowSamples(priv->fieldcache, query, hit);
+}
+
+void N_FC_AddLosSamplesAt(void *nav_private, unsigned query, unsigned hit)
+{
+    assert(nav_private);
+    struct nav_private *priv = (struct nav_private*)nav_private;
+    N_FC_AddLosSamples(priv->fieldcache, query, hit);
+}
+
 void N_FC_ClearAllAt(void *nav_private)
 {
     assert(nav_private);

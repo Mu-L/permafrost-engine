@@ -873,6 +873,18 @@ bool   M_AL_WritePFMap(const struct map *map, SDL_RWops *stream);
  */
 void M_GetFieldCacheStats(const struct map *map, struct fc_stats *out);
 
+/* ------------------------------------------------------------------------
+ * Post a batch of flow-field cache hit-rate samples from the nav tick task.
+ * ------------------------------------------------------------------------
+ */
+void M_NavAddFlowSamples(const struct map *map, unsigned query, unsigned hit);
+
+/* ------------------------------------------------------------------------
+ * Post a batch of LOS-field cache hit-rate samples from the nav tick task.
+ * ------------------------------------------------------------------------
+ */
+void M_NavAddLosSamples(const struct map *map, unsigned query, unsigned hit);
+
 /*###########################################################################*/
 /* MAP COVER                                                                 */
 /*###########################################################################*/

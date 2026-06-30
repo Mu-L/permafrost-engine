@@ -843,6 +843,18 @@ void      N_FC_ClearStatsAt(void *nav_private);
 void      N_FC_GetStatsAt(void *nav_private, struct fc_stats *out_stats);
 
 /* ------------------------------------------------------------------------
+ * Add a batch of flow-field cache hit-rate samples (query and hit counts).
+ * ------------------------------------------------------------------------
+ */
+void      N_FC_AddFlowSamplesAt(void *nav_private, unsigned query, unsigned hit);
+
+/* ------------------------------------------------------------------------
+ * Add a batch of LOS-field cache hit-rate samples (query and hit counts).
+ * ------------------------------------------------------------------------
+ */
+void      N_FC_AddLosSamplesAt(void *nav_private, unsigned query, unsigned hit);
+
+/* ------------------------------------------------------------------------
  * Reset the contents of all the caches.
  * ------------------------------------------------------------------------
  */

@@ -173,6 +173,8 @@ void N_FC_PutGridPath(struct fieldcache_ctx *ctx,
 
 void      N_FC_ClearStats(struct fieldcache_ctx *ctx);
 void      N_FC_GetStats(struct fieldcache_ctx *ctx, struct fc_stats *out_stats);
+void      N_FC_AddFlowSamples(struct fieldcache_ctx *ctx, unsigned query, unsigned hit);
+void      N_FC_AddLosSamples(struct fieldcache_ctx *ctx, unsigned query, unsigned hit);
 void      N_FC_ClearAll(struct fieldcache_ctx *ctx);
 
 #endif
